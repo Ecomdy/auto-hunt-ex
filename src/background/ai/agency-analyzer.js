@@ -283,15 +283,16 @@ async function callOpenAiOnce(apiKey, model, researchInput, upworkAgencyUrl, att
 }
 
 /**
- * @param {string} apiKey OpenAI API key (config.js)
- * @param {string} model Model OpenAI (UPWORK_GPT_MODEL trong .env — model duy nhất cho toàn extension
- *   từ 2026-09-24, PHẢI hỗ trợ tool web_search + reasoning.effort)
+ * @param {string} apiKey OpenAI API key (user tự nhập qua UI, xem src/shared/api-key-store.js —
+ *   2026-09-25, không còn qua .env/config.js)
+ * @param {string} model Model OpenAI (GPT_MODEL trong background.js — model duy nhất cho toàn
+ *   extension từ 2026-09-24, PHẢI hỗ trợ tool web_search + reasoning.effort)
  * @param {{upworkAgencyUrl: string, agencyData: object, crawledAt?: string}} agency
  * @returns {Promise<object>} JSON contact đã chuẩn hóa cho agency
  */
 export async function analyzeAgency(apiKey, model, agency) {
   if (!apiKey) {
-    throw new Error('OpenAI API key is not configured — set OPENAI_API_KEY in .env then run node scripts/gen-config.mjs.');
+    throw new Error('OpenAI API key is not configured — open the Hunt-Ex panel and enter your API key first.');
   }
 
   const agencyData =

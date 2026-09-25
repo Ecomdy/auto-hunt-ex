@@ -11,10 +11,23 @@ let activeCrawlTabId = null;
 // không thể "gửi 1 message rồi chờ" như freelancer, nên cần cờ dừng riêng kiểm tra giữa mỗi agency.
 let agencyCrawlStopRequested = false;
 
+// Gate lúc mới mở panel (2026-09-25): trước đây extension đã có sẵn OpenAI key qua .env/config.js
+// (người build nạp sẵn), giờ marketing team tự nhập key qua UI (không tự thêm .env được) nên phải
+// chặn home-view lại cho tới khi có key hợp lệ đã lưu — xem GET_API_KEY_STATUS trong background.js.
+function showApiKeyGate() {
+  currentPlatform = null;
+  $('apikey-view').hidden = false;
+  $('home-view').hidden = true;
+  $('platform-view').hidden = true;
+  $('leads-section').hidden = true;
+}
+
 function showHome() {
   currentPlatform = null;
+  $('apikey-view').hidden = true;
   $('home-view').hidden = false;
   $('platform-view').hidden = true;
+  $('leads-section').hidden = false;
   showStatus('');
 }
 
@@ -736,5 +749,41 @@ $('options-link').addEventListener('click', (e) => {
   chrome.runtime.openOptionsPage();
 });
 
-showHome();
+// Test trước khi lưu (không lưu nếu test fail) — tránh trường hợp gõ nhầm key, lưu xong mới biết
+// sai lúc bấm Auto-hunt (lỗi mơ hồ hơn nhiều so với báo ngay tại đây).
+$('apikey-save-btn').addEventListener('click', async () => {
+  const apiKey = $('apikey-input').value.trim();
+  if (!apiKey) return showStatus('Please enter an API key.');
+  showStatus('');
+  setLoading($('apikey-save-btn'), true, 'Testing key...');
+  try {
+    const testResult = await sendToBackground({ type: 'TEST_API_KEY', apiKey });
+    if (!testResult.ok) {
+      showStatus(`Key test failed: ${testResult.error}`);
+      return;
+    }
+    await sendToBackground({ type: 'SAVE_API_KEY', apiKey });
+    showHome();
+    showStatus('API key saved and working.', false);
+  } catch (err) {
+    showStatus(err.message);
+  } finally {
+    setLoading($('apikey-save-btn'), false);
+  }
+});
+
+async function initView() {
+  try {
+    const { hasKey } = await sendToBackground({ type: 'GET_API_KEY_STATUS' });
+    if (hasKey) showHome();
+    else showApiKeyGate();
+  } catch (err) {
+    // GET_API_KEY_STATUS chỉ đọc chrome.storage, gần như không bao giờ throw — nhưng nếu có (vd
+    // service worker vừa restart), rơi về gate để user tự nhập lại thay vì kẹt màn hình trắng.
+    showApiKeyGate();
+    showStatus(err.message);
+  }
+}
+
+initView();
 refreshLeads();

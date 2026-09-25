@@ -8,6 +8,7 @@
   --primary-hover: #4338ca;
   --primary-contrast: #ffffff;
   --success: #16a34a;
+  --danger: #dc2626;
   --radius: 10px;
   --radius-sm: 7px;
 }
@@ -23,6 +24,7 @@
     --primary-hover: #a5b4fc;
     --primary-contrast: #14162a;
     --success: #4ade80;
+    --danger: #f87171;
   }
 }
 
@@ -120,7 +122,7 @@ input:focus, select:focus {
 }
 
 .btn {
-  border: none;
+  border: 1px solid transparent;
   font: inherit;
   font-weight: 600;
   padding: 8px 16px;
@@ -138,9 +140,31 @@ input:focus, select:focus {
   background: var(--primary-hover);
 }
 
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+  padding: 6px 12px;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.btn-ghost:hover {
+  border-color: var(--text-muted);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .status {
   margin: 10px 0 0;
   font-size: 12px;
-  color: var(--success);
+  color: var(--danger);
   min-height: 14px;
+}
+
+.status-success {
+  color: var(--success);
 }

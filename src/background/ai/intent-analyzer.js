@@ -30,16 +30,17 @@ const INTENT_SCHEMA = {
 };
 
 /**
- * @param {string} apiKey OpenAI API key (đã cấu hình sẵn qua .env -> scripts/gen-config.mjs)
- * @param {string} model Model OpenAI dùng để phân tích (cũng từ .env, xem UPWORK_GPT_MODEL — 2026-09-24
- *   gộp chung 1 model duy nhất cho toàn extension, không còn GPT_MODEL riêng)
+ * @param {string} apiKey OpenAI API key (user tự nhập qua UI, xem src/shared/api-key-store.js —
+ *   2026-09-25, không còn qua .env/scripts/gen-config.mjs)
+ * @param {string} model Model OpenAI dùng để phân tích — hardcode 1 model duy nhất cho toàn extension
+ *   (GPT_MODEL trong background.js, đổi tên từ UPWORK_GPT_MODEL lúc bỏ .env)
  * @param {string} description Mô tả khách hàng mục tiêu do team marketing nhập
  * @param {string} platformLabel Tên nền tảng đang tìm lead (VD: "LinkedIn", "Upwork") — đưa vào prompt
  * @returns {Promise<{searchQuery: string, keywords: string[], excludeKeywords: string[], notes: string}>}
  */
 export async function analyzeIntent(apiKey, model, description, platformLabel) {
   if (!apiKey) {
-    throw new Error('OpenAI API key is not configured — set OPENAI_API_KEY in .env then run node scripts/gen-config.mjs.');
+    throw new Error('OpenAI API key is not configured — open the Hunt-Ex panel and enter your API key first.');
   }
   if (!description || !description.trim()) {
     throw new Error('Please describe the target customer before analyzing.');

@@ -11,7 +11,13 @@ manifest.json
 src/
   background/           # service worker (ES module, "type": "module")
     background.js        # message router: ANALYZE_INTENT / ANALYZE_PROFILE / ANALYZE_AGENCY / SAVE_LEADS /
-                           # GET_LEADS / CLEAR_LEADS
+                           # GET_LEADS / CLEAR_LEADS / GET_API_KEY_STATUS / SAVE_API_KEY / TEST_API_KEY
+                           # (3 message cuối, 2026-09-25 — xem mục "OpenAI API key"). Model OpenAI hardcode
+                           # thẳng ở đây (const GPT_MODEL), không còn đọc từ file config nào nữa.
+    ai/key-tester.js      # testApiKey() — gọi GET /v1/models để kiểm tra 1 key còn dùng được không,
+                           # KHÔNG tốn token (khác intent/profile/agency/fiverr-analyzer.js đều gọi
+                           # /v1/responses thật). Dùng cho nút "Test key" (side panel lúc onboarding +
+                           # Settings lúc đổi key). Tự chứa, không import gì.
     ai/intent-analyzer.js # gọi thẳng OpenAI Responses API (fetch từ browser)
     ai/profile-analyzer.js # phân tích 1 profile Upwork (freelancer) đã crawl -> tìm contact info công khai
                            # (tool web_search, tool_choice: 'required') — xem TODO cuối file (tool
@@ -54,8 +60,12 @@ src/
                            # phát hiện block/CAPTCHA. CHƯA có unit test riêng (khác quy ước file UMD
                            # khác), xem TODO cuối CLAUDE.md.
   popup/                 # UI chính, hiển thị dưới dạng SIDE PANEL (không phải popup dropdown — xem bên dưới)
-                           # nhập mô tả khách hàng -> AI phân tích -> crawl -> xem/xuất lead
-  options/                # cấu hình nơi lưu lead (mode local/remote) — KHÔNG có ô nhập API key
+                           # nhập mô tả khách hàng -> AI phân tích -> crawl -> xem/xuất lead. Mở panel lần
+                           # đầu (chưa lưu API key) -> chặn ở `#apikey-view` trước cả `#home-view`, xem
+                           # mục "OpenAI API key".
+  options/                # Settings — có ô nhập/đổi API key OpenAI (+ nút "Test key") VÀ cấu hình nơi
+                           # lưu lead (mode local/remote). Trước 2026-09-25 KHÔNG có ô API key (key nạp
+                           # sẵn qua .env lúc build) — xem mục "OpenAI API key" cho lý do đổi.
   shared/
     platforms.js          # registry platform (dùng ở background + popup, KHÔNG dùng trong content script)
                            # mỗi platform có searchUrlTemplate — null nghĩa là CHƯA xác nhận URL search
@@ -68,29 +78,70 @@ src/
                            # nguyên filter này. directSearch: true (hiện chỉ Upwork) -> popup ẩn hẳn
                            # bước "Analyze with AI" (mô tả tự nhiên -> AI diễn giải), user gõ thẳng câu
                            # search vào ô search-query rồi bấm Auto-hunt luôn (quyết định 2026-09-23).
-    config.js             # SINH TỰ ĐỘNG từ .env bởi scripts/gen-config.mjs — gitignore, KHÔNG sửa tay/commit
-scripts/gen-config.mjs    # đọc .env (root) -> ghi src/shared/config.js
-.env                       # gitignore — OPENAI_API_KEY thật
-.env.example                # template đã commit
+    api-key-store.js      # get/setApiKey() qua chrome.storage.sync — nguồn sự thật DUY NHẤT cho
+                           # OpenAI API key (2026-09-25). Trước đó là `shared/config.js` (đã xoá).
 ```
 
 ## OpenAI API key
 
-Nguồn sự thật là `.env` ở root (gitignore). Extension chạy trong browser (background service
-worker/content script/popup) nên KHÔNG đọc được `.env`/`process.env` trực tiếp — vì vậy
-`node scripts/gen-config.mjs` đọc `.env` và sinh ra `src/shared/config.js` (cũng gitignore,
-KHÔNG sửa tay file này, sửa `.env` rồi chạy lại script). `background.js` import key từ
-`config.js`. Marketing team (user cuối) nhận extension đã có sẵn key, không tự nhập —
-người build chạy 2 bước trên 1 lần trước khi phân phối.
+**Lịch sử (đến 2026-09-24):** nguồn sự thật là `.env` ở root (gitignore) -> `node
+scripts/gen-config.mjs` sinh `src/shared/config.js` (cũng gitignore) -> `background.js` import
+key từ đó. Người build chạy 2 bước này 1 lần trước khi đóng gói extension phân phối cho
+marketing team — team không tự nhập key.
 
-Gọi thẳng `https://api.openai.com/v1/responses` từ background — không cần header CORS đặc
-biệt như Anthropic, vì extension đã khai báo `host_permissions` cho `api.openai.com` trong
-`manifest.json` (extension có host_permissions thì fetch cross-origin không bị CORS chặn,
-khác với 1 trang web thường).
+**Đổi hẳn sang nhập qua UI (2026-09-25, theo yêu cầu user):** marketing team tự cài extension
+(Load unpacked hoặc file .zip nội bộ) và **không tự tạo được file `.env`** — luồng cũ đòi hỏi có
+người build làm hộ 2 bước trên mỗi lần key hết hạn/đổi máy, không scale cho việc tự phân phối.
+Bỏ hẳn `.env`/`scripts/gen-config.mjs`/`src/shared/config.js` (3 file này đã xoá khỏi repo — xem
+git log nếu cần đối chiếu code cũ). Key giờ do chính user (marketing hoặc dev) nhập trực tiếp
+trên giao diện, lưu qua `chrome.storage.sync` (`src/shared/api-key-store.js`, key
+`huntexOpenAiApiKey` — cùng cơ chế `huntexBackendApiKey` đã có sẵn ở `remote-lead-repository.js`,
+KHÔNG dùng `chrome.storage.session` vì đây là config cần giữ lâu dài, khác leads/cache vốn cố ý
+tự mất khi đóng trình duyệt).
 
-Lưu ý: key vẫn nằm plaintext trong folder extension của mọi máy nhận (không tương đương
-biến môi trường phía server, không bao giờ rời server). Nếu cần bảo mật hơn: chuyển gọi
-OpenAI qua backend nội bộ Ecomdy (khi có) thay vì gọi thẳng từ extension.
+Model OpenAI (`gpt-5.6-terra`) thì NGƯỢC LẠI — **không** đưa lên UI cho user chọn (quyết định
+user 2026-09-25: "thống nhất dùng model này cho tất cả"). Hardcode thẳng thành `const GPT_MODEL`
+trong `background.js`, đổi tên từ `UPWORK_GPT_MODEL` (biến `.env` cũ, tên lịch sử từ lúc chỉ
+Upwork dùng — hết lý do giữ tên cũ sau khi bỏ `.env`).
+
+2 điểm chạm chính:
+
+1. **Onboarding (side panel, lần đầu chưa có key)** — `popup.js`/`popup.html`: mở panel ->
+   `initView()` gọi `GET_API_KEY_STATUS`; chưa có key -> hiện `#apikey-view` (chặn cả `#home-view`
+   lẫn `#leads-section`, xem `showApiKeyGate()`) thay vì hiện luôn danh sách platform. Nút "Save &
+   test key" gọi `TEST_API_KEY` trước — **CHỈ lưu (`SAVE_API_KEY`) nếu test pass** — tránh lưu
+   nhầm key gõ sai rồi phát hiện ra lỗi mơ hồ hơn nhiều lúc bấm Auto-hunt (401 gốc từ OpenAI).
+2. **Settings (`options/`, đổi key sau này)** — `options.html`/`options.js`: ô `apikey-input` dùng
+   chung vòng load()/save-btn generic đã có sẵn cho `storage-mode`/`backend-url`/`backend-key`
+   (thêm 1 dòng vào `FIELDS`, không cần code riêng) — nút "Save" ở đây lưu TRỰC TIẾP, không bắt
+   buộc test trước (khác onboarding) vì đây không phải lần đầu, user có thể đang thao tác nhiều
+   field cùng lúc. Nút "Test key" riêng, độc lập với Save, test đúng giá trị đang gõ trong ô
+   (chưa cần bấm Save trước) — dùng khi nghi ngờ key hết hạn/hết quota mà không muốn gõ lại.
+
+Message contract (`background.js`, xem comment đầu file):
+`GET_API_KEY_STATUS` -> `{hasKey}` (không trả key thật ra ngoài background — popup chỉ cần biết
+có/không để quyết định hiện view nào); `SAVE_API_KEY {apiKey}` -> `{saved: true}`; `TEST_API_KEY
+{apiKey?}` -> `{ok, error?}` (bỏ trống `apiKey` thì test đúng key đang lưu trong storage, dùng
+cho nút Test key ở Settings không kèm giá trị mới). Cả `ANALYZE_INTENT`/`ANALYZE_PROFILE`/
+`ANALYZE_AGENCY`/`ANALYZE_FIVERR` đều gọi `requireApiKey()` (throw lỗi rõ ràng, trỏ user quay lại
+panel nhập key) trước khi gọi OpenAI — không còn import `OPENAI_API_KEY` tĩnh lúc module load.
+`src/background/ai/key-tester.js` (`testApiKey()`) gọi `GET /v1/models` (không phải
+`/v1/responses`) để xác thực key mà KHÔNG tốn token — dùng chung cho cả 2 điểm chạm trên qua
+`TEST_API_KEY`. Test: `tests/key-tester.test.mjs` (401/lỗi khác/network error), `tests/
+api-key-store.test.mjs` (round-trip get/set qua chrome.storage.sync mock).
+
+Gọi thẳng `https://api.openai.com/v1/responses` (và `/v1/models` cho key-tester.js) từ background
+— không cần header CORS đặc biệt như Anthropic, vì extension đã khai báo `host_permissions` cho
+`api.openai.com` trong `manifest.json` (extension có host_permissions thì fetch cross-origin
+không bị CORS chặn, khác với 1 trang web thường; host_permissions áp dụng theo origin nên
+`/v1/models` dùng chung quyền với `/v1/responses`, không cần khai báo thêm).
+
+Lưu ý bảo mật KHÔNG đổi so với cách cũ: key vẫn nằm plaintext trên máy — trước đây trong
+`config.js` sinh sẵn, giờ trong `chrome.storage.sync` (đồng bộ qua tài khoản Google Chrome của
+chính user, Google mã hoá lúc truyền/lưu nhưng KHÔNG phải bảo mật cấp server — vẫn là 1 client
+tự giữ key, không tương đương biến môi trường phía server, không bao giờ rời máy/tài khoản
+Chrome của user). Nếu cần bảo mật hơn: chuyển gọi OpenAI qua backend nội bộ Ecomdy (khi có) thay
+vì gọi thẳng từ extension.
 
 ## UI: Side Panel, không phải popup
 
@@ -170,19 +221,20 @@ Lead shape dùng xuyên suốt: `{ platform, title, url, snippet, postedAt, extr
   đang `null` — `buildSearchUrl()` sẽ throw lỗi rõ ràng thay vì tự đoán URL (kể cả pattern quen thuộc).
 - **Backend/CRM nội bộ Ecomdy**: chưa có endpoint/schema thật. `remote-lead-repository.js` đang stub.
   Không tự bịa URL hay payload schema.
-- Model OpenAI: CHỈ 1 biến duy nhất `UPWORK_GPT_MODEL` trong `.env` cho TOÀN BỘ extension (gộp lại
-  2026-09-24 — trước đó có thêm `GPT_MODEL` riêng cho `intent-analyzer.js`, đã bỏ vì thừa: tổ chức
-  2 biến trỏ cùng 1 khái niệm "model OpenAI đang dùng" không có lợi ích rõ ràng). Tên biến còn giữ
-  "UPWORK" do lịch sử dù giờ áp dụng cho cả LinkedIn/Fiverr — xem TODO cuối file nếu muốn đổi tên rõ
-  nghĩa hơn. Hiện dùng `gpt-5.6-terra` (model reasoning, PHẢI hỗ trợ `web_search` + `reasoning.effort`
-  + Structured Outputs — không phải model non-reasoning như `gpt-4.1` cũ). Vì `intent-analyzer.js`
-  không cần reasoning (không tool call, không judgement phức tạp) nên set cứng
-  `reasoning: { effort: 'none' }` cho riêng request đó để không tốn thêm token/latency so với lúc còn
-  dùng `gpt-4.1` riêng — 3 file kia (profile/agency/fiverr) vẫn tự chọn effort theo nhu cầu từng stage
-  (`medium` cho identity, `low` cho contact/agency/fiverr). Agency flow whitelist input OpenAI còn
-  đúng `name`, `description`, `location`, `service`, dùng Structured Outputs và tối đa 1 lượt web
-  search để kiểm soát token; freelancer flow vẫn tối đa 2 lượt. Đổi model: sửa `.env` -> chạy lại
-  `node scripts/gen-config.mjs`.
+- Model OpenAI: CHỈ 1 hằng số duy nhất `GPT_MODEL` trong `background.js` cho TOÀN BỘ extension —
+  hardcode trong code, KHÔNG lên UI cho user chọn (quyết định user 2026-09-25: "thống nhất dùng
+  model này cho tất cả", cùng lúc bỏ `.env`/`config.js`, xem mục "OpenAI API key" + TODO cuối file).
+  Trước 2026-09-25 là biến `.env` tên `UPWORK_GPT_MODEL` (tên lịch sử từ lúc chỉ Upwork dùng, rồi
+  gộp chung cho cả extension 2026-09-24) — đã đổi tên thành `GPT_MODEL` nhân tiện lúc bỏ `.env`,
+  không còn ràng buộc phải giữ tên cũ. Hiện dùng `gpt-5.6-terra` (model reasoning, PHẢI hỗ trợ
+  `web_search` + `reasoning.effort` + Structured Outputs — không phải model non-reasoning như
+  `gpt-4.1` cũ). Vì `intent-analyzer.js` không cần reasoning (không tool call, không judgement phức
+  tạp) nên set cứng `reasoning: { effort: 'none' }` cho riêng request đó để không tốn thêm
+  token/latency so với lúc còn dùng `gpt-4.1` riêng — 3 file kia (profile/agency/fiverr) vẫn tự
+  chọn effort theo nhu cầu từng stage (`medium` cho identity, `low` cho contact/agency/fiverr).
+  Agency flow whitelist input OpenAI còn đúng `name`, `description`, `location`, `service`, dùng
+  Structured Outputs và tối đa 1 lượt web search để kiểm soát token; freelancer flow vẫn tối đa 2
+  lượt. Đổi model: sửa thẳng `const GPT_MODEL` trong `background.js`, reload extension.
 
 ## Quy ước code
 
@@ -879,3 +931,67 @@ Lead shape dùng xuyên suốt: `{ platform, title, url, snippet, postedAt, extr
       test nào vỡ, không cần thêm test mới (không có assertion `deepEqual` nào so khớp NGUYÊN object
       kết quả, chỉ so từng field con nên field mới không phá test cũ).
 - [ ] Endpoint + schema backend CRM nội bộ Ecomdy (khi có, điền vào Options, đổi `huntexLeadStorageMode` sang `remote`).
+- [x] Bỏ hẳn `.env`/`scripts/gen-config.mjs`/`src/shared/config.js`, chuyển OpenAI API key sang
+      nhập trực tiếp trên UI (2026-09-25, theo yêu cầu user — marketing team tự cài extension,
+      KHÔNG tự tạo được file `.env`, luồng cũ bắt buộc phải có người build/dev làm hộ 2 bước mỗi
+      lần key hết hạn hoặc cài máy mới). Chi tiết đầy đủ ở mục "OpenAI API key" phía trên — mục
+      này chỉ ghi lại NHỮNG GÌ ĐÃ XOÁ/ĐỔI để đối chiếu nếu cần tìm lại code cũ qua git log:
+      - Đã xoá: `.env.example` (template, tracked), `scripts/gen-config.mjs` (generator, tracked),
+        `src/shared/config.js` (file sinh ra chứa key thật, gitignore — KHÔNG xoá `.env` thật của
+        user vì đó là bản backup duy nhất còn giữ key để copy dán vào UI mới, tự hỏi user trước
+        khi xoá nốt).
+      - File mới: `src/shared/api-key-store.js` (get/setApiKey qua `chrome.storage.sync`, key
+        `huntexOpenAiApiKey`), `src/background/ai/key-tester.js` (`testApiKey()`, gọi
+        `GET /v1/models` — không tốn token, khác `/v1/responses` các file analyzer khác dùng).
+      - `background.js`: bỏ `import { OPENAI_API_KEY, UPWORK_GPT_MODEL } from '../shared/config.js'`,
+        thêm `const GPT_MODEL = 'gpt-5.6-terra'` hardcode (đổi tên từ `UPWORK_GPT_MODEL` — hết lý do
+        giữ tên lịch sử sau khi bỏ biến `.env`, xem TODO cũ ở mục Upwork nói về việc này — TODO đó
+        coi như đã xong luôn). Model KHÔNG lên UI cho user chọn (quyết định user: "thống nhất dùng
+        model này cho tất cả") — khác hẳn cách xử lý API key. Thêm `requireApiKey()` (throw lỗi rõ
+        ràng trỏ user quay lại panel) gọi trước MỌI handler cần OpenAI (`ANALYZE_INTENT`/
+        `ANALYZE_AGENCY`/`ANALYZE_FIVERR`, và trong `analyzeProfileCached()` sau bước check cache
+        — cache hit thì không cần key). Thêm 3 message mới: `GET_API_KEY_STATUS` -> `{hasKey}`,
+        `SAVE_API_KEY {apiKey}` -> `{saved: true}`, `TEST_API_KEY {apiKey?}` -> `{ok, error?}`.
+      - 4 file `ai/*.js` (`intent-analyzer.js`/`agency-analyzer.js`/`fiverr-analyzer.js`/
+        `profile-analyzer.js`): sửa JSDoc + đổi câu error "OpenAI API key is not configured" (bỏ
+        nhắc `.env`/`gen-config.mjs`, giờ nói "open the Hunt-Ex panel and enter your API key
+        first") — check `if (!apiKey)` bên trong các hàm này giờ hầu như không bao giờ chạm tới
+        (background đã chặn từ `requireApiKey()` trước khi gọi), giữ lại làm lớp phòng thủ nếu sau
+        này có chỗ khác gọi thẳng các hàm này mà quên check.
+      - UI onboarding (side panel, `popup.html`/`popup.js`): thêm `#apikey-view` — panel mở lần đầu
+        (chưa có key trong storage) hiện màn nhập key + nút "Save & test key" THAY VÌ `#home-view`.
+        `initView()` (thay `showHome()` gọi thẳng lúc cuối file cũ) gọi `GET_API_KEY_STATUS` để
+        quyết định hiện view nào. Nút Save & test: gọi `TEST_API_KEY` trước, CHỈ `SAVE_API_KEY` nếu
+        test pass — tránh lưu nhầm key gõ sai (test fail thì báo lỗi tại chỗ, không lưu, user sửa
+        lại gõ tiếp). `showApiKeyGate()`/`showHome()` cũng ẩn/hiện `#leads-section` (id mới thêm
+        cho card leads) theo view — lúc chưa có key thì ẩn luôn danh sách lead cho đỡ rối, dù leads
+        cũ (nếu có) không thật sự phụ thuộc key.
+      - UI Settings (`options/`): thay hẳn khối `<p class="hint">` cũ ("key đã cấu hình qua .env")
+        bằng ô `apikey-input` + nút "Test key" riêng. `apikey-input` dùng CHUNG vòng lặp
+        load()/save-btn generic đã có sẵn (thêm 1 dòng vào `FIELDS`, tái dùng logic cũ thay vì viết
+        code riêng) — nút "Save" chung ở cuối trang lưu TRỰC TIẾP không bắt buộc test trước (khác
+        hẳn onboarding — đây không phải lần đầu, và user có thể đang sửa nhiều field khác cùng lúc
+        như storage-mode/backend-url). Nút "Test key" độc lập, test đúng giá trị đang gõ trong ô
+        (không cần bấm Save trước) — dùng khi nghi ngờ key hết hạn/hết quota.
+      - `options.css`: thêm biến `--danger` (+ dark mode), đổi `.status` sang mặc định màu lỗi kèm
+        `.status-success` override — trước đó `.status` của trang Settings LUÔN xanh (chỉ dùng cho
+        thông báo "Saved.", chưa từng cần hiện lỗi) nên phải thêm state lỗi cho kết quả "Test key"
+        thất bại; thêm `.btn-ghost` (mượn nguyên style từ `popup.css`, trang Settings trước đó
+        chưa có biến thể nút này).
+      - `.gitignore` giữ nguyên (`'.env`, `src/shared/config.js` vẫn nằm trong danh sách ignore dù
+        2 file/luồng đó không còn ai tạo ra nữa) — CỐ Ý không xoá 2 dòng này: nếu sau này ai đó lỡ
+        tạo lại `.env` (quen tay từ luồng cũ) hoặc chạy nhầm script cũ từ 1 branch cũ, vẫn không bị
+        lỡ tay `git add -A` commit nhầm key thật.
+      - Test mới: `tests/key-tester.test.mjs` (200 -> `{ok:true}`, 401 -> lỗi rõ "invalid API
+        key", lỗi khác giữ nguyên message từ OpenAI, network error không throw ra ngoài mà trả
+        `{ok:false, error}`), `tests/api-key-store.test.mjs` (round-trip get/set qua
+        `chrome.storage.sync` mock, cùng khuôn mock với `tests/profile-research-cache.test.mjs`
+        nhưng cho `storage.sync` thay vì `storage.session`). Đã chạy lại toàn bộ
+        `node --test tests/**/*.test.*` (53 test, tăng từ 47 — không có test nào của luồng cũ bị
+        xoá vì `config.js`/`gen-config.mjs` chưa từng có test riêng).
+      **CHƯA verify live** (chưa tự chạy thử end-to-end trên Chrome thật trong session này — mới
+      `node --check` cú pháp + chạy test suite): luồng onboarding thật (mở panel lần đầu -> thấy
+      đúng `#apikey-view` -> nhập key thật -> Test key thật gọi được OpenAI -> Save -> chuyển sang
+      home-view -> Auto-hunt dùng đúng key vừa lưu), và nút "Test key"/"Save" ở Settings. Cần user
+      tự mở lại extension (reload ở `chrome://extensions` vì `background.js`/`manifest.json` liên
+      quan đã đổi) rồi thử tay trước khi coi đây là xong hẳn.

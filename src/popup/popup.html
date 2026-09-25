@@ -15,7 +15,17 @@
     </header>
 
     <main>
-      <section class="card" id="home-view">
+      <section class="card" id="apikey-view" hidden>
+        <p class="hint-text" style="margin-top: 0">
+          Hunt-Ex needs an OpenAI API key to analyze search intent and research leads. Paste your
+          key below to get started.
+        </p>
+        <label for="apikey-input">OpenAI API key</label>
+        <input id="apikey-input" type="password" placeholder="sk-..." autocomplete="off" />
+        <button id="apikey-save-btn" class="btn btn-primary btn-block">Save &amp; test key</button>
+      </section>
+
+      <section class="card" id="home-view" hidden>
         <p class="hint-text" style="margin-top: 0">Choose a platform to start finding leads</p>
         <button class="btn btn-primary btn-block platform-btn" data-platform="linkedin" hidden>LinkedIn</button>
         <button class="btn btn-primary btn-block platform-btn" data-platform="upwork">Upwork</button>
@@ -81,7 +91,7 @@
         </section>
       </div>
 
-      <section class="card">
+      <section class="card" id="leads-section">
         <div class="leads-header">
           <span id="leads-count" class="leads-count">0 leads saved</span>
           <div class="btn-group">

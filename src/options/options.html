@@ -13,7 +13,10 @@
     </header>
 
     <section class="card">
-      <p class="hint">The OpenAI API key is already configured in the extension (via <code>.env</code>) — no need to enter it here.</p>
+      <label for="apikey-input">OpenAI API key</label>
+      <input id="apikey-input" type="password" placeholder="sk-..." autocomplete="off" />
+      <button id="apikey-test-btn" class="btn btn-ghost">Test key</button>
+      <p id="apikey-test-status" class="status"></p>
     </section>
 
     <section class="card">

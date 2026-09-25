@@ -651,7 +651,7 @@ function buildFinalResult(identity, contact, identityInput, upworkProfileUrl) {
  */
 export async function analyzeProfile(apiKey, model, profile) {
   if (!apiKey) {
-    throw new Error('OpenAI API key is not configured — set OPENAI_API_KEY in .env then run node scripts/gen-config.mjs.');
+    throw new Error('OpenAI API key is not configured — open the Hunt-Ex panel and enter your API key first.');
   }
 
   const profileData =

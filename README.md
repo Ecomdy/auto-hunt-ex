@@ -14,20 +14,20 @@ See [CLAUDE.md](CLAUDE.md) for architecture details and code conventions.
 Slide deck walkthrough for marketing (install & login, flow, filters, contact hit-rate, data
 fields): https://claude.ai/artifact/T5V8QW9a5UbyTtZ87rDKKf?sk=CIJYVS_l-VTHEG6qfrmDpQ
 
-## Setup (dev)
+## Setup
 
-**Requires:** Node.js (only to run the config-generation script below — no bundler or npm
-dependency in this project).
+No build step, no Node.js required to run this — just load the folder and paste in an API key:
 
-1. Copy `.env.example` to `.env`, fill in your real `OPENAI_API_KEY`.
-2. Run `node scripts/gen-config.mjs` — reads `.env` and generates `src/shared/config.js`.
-3. Open Chrome → `chrome://extensions` → enable **Developer mode**
-4. Click **Load unpacked** → select this project folder
-5. Click the extension icon in the toolbar → the **side panel** opens on the right (not a
+1. Open Chrome → `chrome://extensions` → enable **Developer mode**
+2. Click **Load unpacked** → select this project folder
+3. Click the extension icon in the toolbar → the **side panel** opens on the right (not a
    popup — it stays open when you switch tabs, so you can analyze then switch over to crawl)
+4. First time only: paste your OpenAI API key into the screen that appears, click **Save & test
+   key**. The extension checks the key works before saving it (stored in `chrome.storage.sync`,
+   nothing to configure on disk).
 
-Changing the key or model: edit `.env` → rerun `node scripts/gen-config.mjs` → reload the
-extension from `chrome://extensions`.
+Changing the key later: open **Settings** (link at the bottom of the panel) → update the OpenAI
+API key field → **Test key** to verify → **Save**.
 
 ## Running tests
 
