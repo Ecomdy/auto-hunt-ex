@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Hunt-Ex</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="logo" aria-hidden="true">HX</div>
+      <div class="app-header-text">
+        <h1>Hunt-Ex</h1>
+      </div>
+    </header>
+
+    <main>
+      <section class="card" id="home-view">
+        <p class="hint-text" style="margin-top: 0">Choose a platform to start finding leads</p>
+        <button class="btn btn-primary btn-block platform-btn" data-platform="linkedin" hidden>LinkedIn</button>
+        <button class="btn btn-primary btn-block platform-btn" data-platform="upwork">Upwork</button>
+        <button class="btn btn-primary btn-block platform-btn" data-platform="fiverr">Fiverr</button>
+      </section>
+
+      <div id="platform-view" hidden>
+        <button id="back-btn" class="btn btn-ghost">&larr; Choose another platform</button>
+        <p id="platform-view-title" class="hint-text"></p>
+
+        <section class="card" id="analyze-section">
+          <label for="description">Target customer description</label>
+          <textarea id="description" rows="3" placeholder="e.g. TikTok Shop owner in Southeast Asia looking for an ads agency..."></textarea>
+          <button id="analyze-btn" class="btn btn-primary btn-block">Analyze with AI</button>
+        </section>
+
+        <section class="card" id="keywords-section" hidden>
+          <label for="search-query">Search query</label>
+          <input id="search-query" type="text" placeholder="e.g. media ads" />
+
+          <div id="account-type-section" hidden>
+            <label>Account type</label>
+            <div class="radio-group">
+              <label class="radio-option"><input type="radio" name="account-type" value="independent" checked /> Freelancer</label>
+              <label class="radio-option"><input type="radio" name="account-type" value="agency" /> Agency</label>
+            </div>
+          </div>
+
+          <div id="relevance-filter-section">
+            <label for="keywords">Relevant keywords (lead must contain at least one, otherwise it's dropped)</label>
+            <textarea id="keywords" rows="2"></textarea>
+
+            <label for="exclude-keywords">Exclude keywords (lead containing these will be dropped)</label>
+            <textarea id="exclude-keywords" rows="2"></textarea>
+          </div>
+
+          <div id="location-section" hidden>
+            <label for="location">Location (optional)</label>
+            <input id="location" type="text" placeholder="e.g. United States" />
+          </div>
+
+          <div id="fiverr-filters-section" hidden>
+            <label for="fiverr-category">Category (optional)</label>
+            <select id="fiverr-category"></select>
+
+            <label for="fiverr-location">Seller location (optional)</label>
+            <select id="fiverr-location"></select>
+          </div>
+
+          <div id="max-leads-section" hidden>
+            <label for="max-leads">Max leads to crawl</label>
+            <input id="max-leads" type="number" min="1" value="50" />
+          </div>
+
+          <p id="ai-notes" class="notes"></p>
+
+          <button id="auto-hunt-btn" class="btn btn-primary btn-block">Auto-hunt leads (opens new tab)</button>
+
+          <button id="crawl-btn" class="btn btn-ghost btn-block">Or: crawl the currently open tab (manual)</button>
+          <p id="crawl-hint" class="hint-text"></p>
+
+          <button id="stop-btn" class="btn btn-ghost btn-danger btn-block" hidden>Stop</button>
+        </section>
+      </div>
+
+      <section class="card">
+        <div class="leads-header">
+          <span id="leads-count" class="leads-count">0 leads saved</span>
+          <div class="btn-group">
+            <button id="export-btn" class="btn btn-ghost">Export CSV</button>
+            <button id="clear-btn" class="btn btn-ghost btn-danger">Clear all</button>
+          </div>
+        </div>
+
+        <div class="lead-group">
+          <div class="lead-group-header">
+            <span class="lead-group-label">LinkedIn</span>
+            <span id="leads-count-linkedin" class="lead-group-count">0</span>
+          </div>
+          <ul id="leads-list-linkedin" class="leads-list"></ul>
+        </div>
+
+        <div class="lead-group">
+          <div class="lead-group-header">
+            <span class="lead-group-label">Upwork &middot; Freelancer</span>
+            <span id="leads-count-upwork-freelancer" class="lead-group-count">0</span>
+          </div>
+          <ul id="leads-list-upwork-freelancer" class="leads-list"></ul>
+        </div>
+
+        <div class="lead-group">
+          <div class="lead-group-header">
+            <span class="lead-group-label">Upwork &middot; Agency</span>
+            <span id="leads-count-upwork-agency" class="lead-group-count">0</span>
+          </div>
+          <ul id="leads-list-upwork-agency" class="leads-list"></ul>
+        </div>
+
+        <div class="lead-group">
+          <div class="lead-group-header">
+            <span class="lead-group-label">Fiverr</span>
+            <span id="leads-count-fiverr" class="lead-group-count">0</span>
+          </div>
+          <ul id="leads-list-fiverr" class="leads-list"></ul>
+        </div>
+      </section>
+
+      <p id="status" class="status" role="status"></p>
+    </main>
+
+    <footer class="app-footer">
+      <a href="#" id="options-link">Settings</a>
+    </footer>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

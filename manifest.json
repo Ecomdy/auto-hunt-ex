@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Hunt-Ex — Lead Hunter",
+  "version": "0.1.0",
+  "description": "Helps the Ecomdy marketing team find potential leads on Upwork, LinkedIn, and Fiverr.",
+  "action": {},
+  "side_panel": {
+    "default_path": "src/popup/popup.html"
+  },
+  "options_page": "src/options/options.html",
+  "background": {
+    "service_worker": "src/background/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": ["src/content-scripts/linkedin.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.upwork.com/*"],
+      "js": [
+        "src/content-scripts/upwork-profile-cleaner.js",
+        "src/content-scripts/upwork-agency-links.js",
+        "src/content-scripts/upwork.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.fiverr.com/*"],
+      "js": [
+        "src/content-scripts/fiverr-extractor.js",
+        "src/content-scripts/fiverr.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage", "activeTab", "downloads", "sidePanel"],
+  "host_permissions": ["https://api.openai.com/*"]
+}
