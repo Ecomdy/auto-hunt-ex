@@ -14,8 +14,21 @@ let agencyCrawlStopRequested = false;
 // Gate lúc mới mở panel (2026-09-25): trước đây extension đã có sẵn OpenAI key qua .env/config.js
 // (người build nạp sẵn), giờ marketing team tự nhập key qua UI (không tự thêm .env được) nên phải
 // chặn home-view lại cho tới khi có key hợp lệ đã lưu — xem GET_API_KEY_STATUS trong background.js.
-function showApiKeyGate() {
+// `provider` (2026-09-28, thêm Exa.ai làm lựa chọn khác cho phần research) chọn sẵn đúng radio +
+// hiện đúng ô input tương ứng, khớp research provider background.js báo về (mặc định 'openai').
+function setApiKeyProviderView(provider) {
+  document.querySelector(`input[name="apikey-provider"][value="${provider}"]`).checked = true;
+  $('openai-key-fields').hidden = provider !== 'openai';
+  $('exa-key-fields').hidden = provider !== 'exa';
+}
+
+document.querySelectorAll('input[name="apikey-provider"]').forEach((radio) => {
+  radio.addEventListener('change', (e) => setApiKeyProviderView(e.target.value));
+});
+
+function showApiKeyGate(provider = 'openai') {
   currentPlatform = null;
+  setApiKeyProviderView(provider);
   $('apikey-view').hidden = false;
   $('home-view').hidden = true;
   $('platform-view').hidden = true;
@@ -321,6 +334,13 @@ function buildLeadItem(lead) {
     }
   }
 
+  if (lead.closeError) {
+    const p = document.createElement('p');
+    p.className = 'analysis-output analysis-output-error';
+    p.textContent = `Crawl stopped: ${lead.closeError}`;
+    li.appendChild(p);
+  }
+
   return li;
 }
 
@@ -423,18 +443,18 @@ async function crawlWithRetry(tabId, keywords, limit, attempts = 4, delayMs = 15
   for (let i = 0; i < attempts; i++) {
     const res = await chrome.tabs.sendMessage(tabId, { type: 'START_CRAWL', keywords, limit });
     if (!res?.ok) throw new Error(res?.error || 'Crawl failed');
-    if (res.leads.length > 0 || i === attempts - 1) return res.leads;
+    if (res.leads.length > 0 || i === attempts - 1) return res;
     await sleep(delayMs);
   }
-  return [];
+  return { leads: [], warning: null };
 }
 
 async function autoHunt(url, keywords, excludeKeywords, limit) {
   const tab = await chrome.tabs.create({ url });
   activeCrawlTabId = tab.id;
   await waitForTabLoad(tab.id);
-  const leads = await crawlWithRetry(tab.id, keywords, limit);
-  return filterLeads(leads, keywords, excludeKeywords);
+  const result = await crawlWithRetry(tab.id, keywords, limit);
+  return { leads: filterLeads(result.leads, keywords, excludeKeywords), warning: result.warning };
 }
 
 function discoverAgenciesOnTab(tabId, limit) {
@@ -677,6 +697,7 @@ $('auto-hunt-btn').addEventListener('click', async () => {
       console.log('[Hunt-Ex] Fiverr auto-hunt inputs:', { searchQuery, location, category, limit, url });
     }
     let leads;
+    let crawlWarning = null;
     if (currentPlatform.key === 'upwork' && accountType === 'agency') {
       leads = await crawlAgencies(url, readMaxLeads());
     } else if (currentPlatform.key === 'fiverr') {
@@ -684,11 +705,17 @@ $('auto-hunt-btn').addEventListener('click', async () => {
     } else {
       const keywords = readKeywordsField('keywords');
       const excludeKeywords = readKeywordsField('exclude-keywords');
-      leads = await autoHunt(url, keywords, excludeKeywords, readMaxLeads());
+      const result = await autoHunt(url, keywords, excludeKeywords, readMaxLeads());
+      leads = result.leads;
+      crawlWarning = result.warning;
     }
     if (leads.length) await sendToBackground({ type: 'SAVE_LEADS', leads });
     await refreshLeads();
-    showStatus(leads.length ? `Added ${leads.length} leads.` : 'No matching leads found — try a different search query.', !leads.length);
+    showStatus(
+      crawlWarning ? `Added ${leads.length} lead(s). Crawl stopped: ${crawlWarning}` :
+        leads.length ? `Added ${leads.length} leads.` : 'No matching leads found — try a different search query.',
+      Boolean(crawlWarning) || !leads.length
+    );
   } catch (err) {
     showStatus(err.message);
   } finally {
@@ -721,7 +748,7 @@ $('crawl-btn').addEventListener('click', async () => {
     const leads = filterLeads(res.leads, keywords, excludeKeywords);
     if (leads.length) await sendToBackground({ type: 'SAVE_LEADS', leads });
     await refreshLeads();
-    showStatus(`Added ${leads.length} leads.`, false);
+    showStatus(res.warning ? `Added ${leads.length} lead(s). Crawl stopped: ${res.warning}` : `Added ${leads.length} leads.`, Boolean(res.warning));
   } catch (err) {
     showStatus(err.message);
   } finally {
@@ -750,19 +777,22 @@ $('options-link').addEventListener('click', (e) => {
 });
 
 // Test trước khi lưu (không lưu nếu test fail) — tránh trường hợp gõ nhầm key, lưu xong mới biết
-// sai lúc bấm Auto-hunt (lỗi mơ hồ hơn nhiều so với báo ngay tại đây).
+// sai lúc bấm Auto-hunt (lỗi mơ hồ hơn nhiều so với báo ngay tại đây). `provider` (2026-09-28) đọc
+// từ radio đang chọn — chọn provider nào thì chỉ cần nhập/lưu đúng key của provider đó, không bắt
+// buộc phải có cả 2 (xem CLAUDE.md).
 $('apikey-save-btn').addEventListener('click', async () => {
-  const apiKey = $('apikey-input').value.trim();
+  const provider = document.querySelector('input[name="apikey-provider"]:checked').value;
+  const apiKey = (provider === 'exa' ? $('exa-apikey-input') : $('apikey-input')).value.trim();
   if (!apiKey) return showStatus('Please enter an API key.');
   showStatus('');
   setLoading($('apikey-save-btn'), true, 'Testing key...');
   try {
-    const testResult = await sendToBackground({ type: 'TEST_API_KEY', apiKey });
+    const testResult = await sendToBackground({ type: 'TEST_API_KEY', provider, apiKey });
     if (!testResult.ok) {
       showStatus(`Key test failed: ${testResult.error}`);
       return;
     }
-    await sendToBackground({ type: 'SAVE_API_KEY', apiKey });
+    await sendToBackground({ type: 'SAVE_API_KEY', provider, apiKey });
     showHome();
     showStatus('API key saved and working.', false);
   } catch (err) {
@@ -774,9 +804,9 @@ $('apikey-save-btn').addEventListener('click', async () => {
 
 async function initView() {
   try {
-    const { hasKey } = await sendToBackground({ type: 'GET_API_KEY_STATUS' });
+    const { provider, hasKey } = await sendToBackground({ type: 'GET_API_KEY_STATUS' });
     if (hasKey) showHome();
-    else showApiKeyGate();
+    else showApiKeyGate(provider);
   } catch (err) {
     // GET_API_KEY_STATUS chỉ đọc chrome.storage, gần như không bao giờ throw — nhưng nếu có (vd
     // service worker vừa restart), rơi về gate để user tự nhập lại thay vì kẹt màn hình trắng.

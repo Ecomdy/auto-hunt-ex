@@ -22,12 +22,18 @@ No build step, no Node.js required to run this — just load the folder and past
 2. Click **Load unpacked** → select this project folder
 3. Click the extension icon in the toolbar → the **side panel** opens on the right (not a
    popup — it stays open when you switch tabs, so you can analyze then switch over to crawl)
-4. First time only: paste your OpenAI API key into the screen that appears, click **Save & test
-   key**. The extension checks the key works before saving it (stored in `chrome.storage.sync`,
-   nothing to configure on disk).
+4. First time only: pick a research provider — **OpenAI (GPT)** or **Exa.ai** — and paste that
+   provider's API key into the screen that appears, click **Save & test key**. The extension
+   checks the key works before saving it (stored in `chrome.storage.sync`, nothing to configure
+   on disk). You only need a key for the provider you pick, not both.
 
-Changing the key later: open **Settings** (link at the bottom of the panel) → update the OpenAI
-API key field → **Test key** to verify → **Save**.
+Changing the key later, or switching provider: open **Settings** (link at the bottom of the
+panel) → pick the provider → update its API key field → **Test key** to verify → **Save**.
+
+> Note: LinkedIn's "describe your customer → AI search query" step always uses OpenAI, regardless
+> of which research provider is selected (it doesn't do web search, so Exa doesn't apply there).
+> Upwork and Fiverr skip that step entirely (type the search query directly), so this only matters
+> if/when LinkedIn is re-enabled for the team.
 
 ## Running tests
 
@@ -53,6 +59,10 @@ node --test tests/**/*.test.*
   implemented (name, headline, location, rate, job success %, badges, skills, etc.), plus a
   profile-detail AI research stage (identity + public contact info) and an agency flow.
 - ✅ Fiverr — search-list + gig-detail crawling implemented, plus AI contact research.
+- ✅ **Research provider choice**: the contact-research step (Upwork freelancer/agency, Fiverr) can
+  run on **OpenAI** (default, verified live) or **Exa.ai** (added 2026-09-28, same output shape,
+  no separate hit-rate/cost benchmark yet — not yet verified live). Pick one in the onboarding
+  screen or Settings; switching providers keeps both keys saved.
 - ⏳ Lead storage: local (`chrome.storage.session`) by default for testing; the internal Ecomdy
   CRM backend has no endpoint yet.
 

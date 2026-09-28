@@ -50,7 +50,11 @@
     if (message?.type === 'START_CRAWL') {
       stopRequested = false;
       scrapeCurrentPage(message.keywords || [], message.limit)
-        .then((leads) => sendResponse({ ok: true, leads }))
+        .then((leads) => sendResponse({
+          ok: true,
+          leads,
+          warning: leads.find((lead) => lead.closeError)?.closeError || null,
+        }))
         .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
       return true;
     }
@@ -259,16 +263,35 @@
   // (nếu Upwork dùng kiểu này cho phần dưới của modal), không chỉ chờ fetch load xong rồi đứng yên.
   // Scroll ngay trong MỖI lần đo (không phải 1 lần ở cuối) — nếu scroll làm mount thêm nội dung mới,
   // vòng lặp ổn định (2 lần đo liên tiếp bằng nhau) sẽ tự kéo dài thêm cho tới khi thật sự hết.
-  async function waitForModalContentStable(modal, { minWaitMs = 2500, timeoutMs = 10000, intervalMs = 400 } = {}) {
+  //
+  // Bug thật gặp lúc chạy live (batch Exa, ngày thứ N sau khi thêm research provider) — nhiều
+  // freelancer LIÊN TIẾP có about/portfolio/education Y HỆT NHAU (của người mở modal TRƯỚC), trong
+  // khi name/headline/location (đọc từ card ngoài list, không phải modal — xem extractProfileData())
+  // vẫn đúng riêng từng người. Nguyên nhân: "ổn định" cũ chỉ kiểm tra "length không đổi giữa 2 lần
+  // đo" — nếu Upwork TÁI DÙNG cùng 1 DOM node của air3-slider giữa các lần mở (rất có thể, vì đây là
+  // panel trượt cạnh chứ không phải modal tạo/huỷ mỗi lần) thay vì tạo node mới, thì ngay sau khi
+  // click card kế tiếp, `document.querySelector(...)` trong openProfileModal() trả về NGAY node cũ
+  // (còn nguyên nội dung người trước) TRƯỚC KHI Upwork kịp fetch xong dữ liệu người mới — content
+  // "không đổi" (đúng nghĩa đen) bị coi nhầm là "đã ổn định", nhưng thực ra là dữ liệu CŨ, sai người.
+  // Sửa: bắt buộc phải thấy content THẬT SỰ khác `priorContent` (chụp lúc TRƯỚC khi click, xem
+  // openProfileModal()) mới bắt đầu đếm "ổn định" — nếu không có priorContent (modal thật sự mới/
+  // trống, đúng trường hợp không có bug) thì bỏ qua yêu cầu này, giữ nguyên hành vi cũ. Nếu hết
+  // timeout mà content CHƯA TỪNG đổi khỏi priorContent, throw thẳng thay vì âm thầm trả về modal cũ —
+  // thà bỏ qua 1 lead (analysisError) còn hơn gửi nhầm data người này sang tìm contact cho người khác
+  // (tốn tiền Exa/OpenAI vô ích + ra kết quả sai mà không ai biết để nghi ngờ).
+  async function waitForModalContentStable(modal, { minWaitMs = 2500, timeoutMs = 10000, intervalMs = 400, priorContent = '' } = {}) {
     const start = Date.now();
     await sleep(minWaitMs);
 
     let lastLength = -1;
     let stableStreak = 0;
+    let changedFromPrior = !priorContent;
     while (Date.now() - start < timeoutMs) {
       scrollModalToBottom(modal);
-      const length = modal.textContent.length;
-      if (length === lastLength) {
+      const text = modal.textContent;
+      if (!changedFromPrior && text !== priorContent) changedFromPrior = true;
+      const length = text.length;
+      if (changedFromPrior && length === lastLength) {
         stableStreak++;
         if (stableStreak >= 2) return;
       } else {
@@ -277,15 +300,58 @@
       }
       await sleep(intervalMs);
     }
+
+    if (!changedFromPrior) {
+      throw new Error(
+        'Modal content never changed from the previous profile after 10s — Upwork likely reused the same modal element and the new profile has not loaded yet.'
+      );
+    }
+    // Content ĐÃ đổi khỏi priorContent nhưng chưa kịp "ổn định" đủ 2 lần đo trong timeout — giữ
+    // nguyên hành vi cũ (best-effort, không throw): đây là case "load chậm", không phải bug mới.
   }
 
-  async function openProfileModal(card) {
-    console.log('[Hunt-Ex] Clicking card to open modal:', card.id);
+  // Contractor id xác nhận thật từ URL profile (vd "~01074f8dd366f73626" — xem getProfileUrl(),
+  // format quan sát được từ chính URL thật khi crawl, không phải đoán) — dùng làm mốc xác nhận "đã
+  // mở đúng người vừa định click" trong openProfileModal().
+  function extractContractorId(url) {
+    const match = typeof url === 'string' ? /~[a-z0-9]+/i.exec(url) : null;
+    return match ? match[0] : null;
+  }
+
+  function openedContractorId() {
+    const match = window.location.pathname.match(/\/nx\/search\/talent\/details\/(~[a-z0-9]+)(?:\/|$)/i);
+    return match ? match[1] : null;
+  }
+
+  // `expectedProfileUrl`: URL freelancer ta ĐỊNH mở, lấy từ extractCard(cards[i]) ngay trước khi gọi
+  // hàm này (xem scrapeCurrentPage()).
+  //
+  // Batch Exa từng mở sai người; lần sau URL cứ đứng ở profile Arthur qua 4 lead liên tiếp. Modal
+  // trước chưa đóng là nguyên nhân phù hợp hơn với bằng chứng mới; search re-render vẫn có thể xảy ra.
+  // Kiểm tra route trước và sau click để không phân tích dữ liệu sai người.
+  async function openProfileModal(card, expectedProfileUrl) {
+    const expectedId = extractContractorId(expectedProfileUrl);
+    if (!expectedId) throw new Error(`Invalid Upwork freelancer URL: ${expectedProfileUrl}`);
+    if (openedContractorId()) {
+      throw new Error(`Cannot open another profile while ${window.location.href} is still open.`);
+    }
+    // Chụp nội dung modal HIỆN CÓ (nếu có) TRƯỚC khi click — mốc so sánh "đã đổi thật sự chưa" cho
+    // waitForModalContentStable() (xem comment ở đó). closeProfileModal() đã xoá hẳn modal khỏi DOM
+    // thì đây là chuỗi rỗng, không ảnh hưởng gì hành vi cũ.
+    const priorContent = document.querySelector('[data-test-route="modal-profile-details"]')?.textContent || '';
+    console.log('[Hunt-Ex] Clicking card to open modal:', card.id, '— expecting contractor id:', expectedId);
     card.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    const matched = await waitFor(() => openedContractorId() === expectedId, 5000);
+    if (!matched) {
+      throw new Error(
+        `Opened the wrong profile: expected contractor "${expectedId}" but the page is now "${window.location.href}" — the previous modal may still be open, or Upwork changed the search result.`
+      );
+    }
+
     const modal = await waitFor(() => document.querySelector('[data-test-route="modal-profile-details"]'), 8000);
     console.log('[Hunt-Ex] Modal found after click?', Boolean(modal));
     if (!modal) throw new Error('Modal did not open after clicking the card');
-    await waitForModalContentStable(modal);
+    await waitForModalContentStable(modal, { priorContent });
     console.log('[Hunt-Ex] Modal content length after waiting for it to stabilize:', modal.textContent.length);
     return modal;
   }
@@ -295,16 +361,29 @@
   // hơn: bấm thẳng nút back của air3-slider (`data-test="BackButton"`, mũi tên trái góc trên modal —
   // user xác nhận bấm nút này đóng HẲN modal về search list, dù data-test tên là "Back" chứ không
   // phải "Close" — vì modal này là kiểu air3-slider trượt từ cạnh, "back" từ slide gốc = thoát
-  // slider). Vẫn giữ Escape làm fallback phòng khi vì lý do nào đó nút back không có trong DOM.
+  // slider). Kiểm tra URL sau mỗi cách đóng; nếu nút Back không hoạt động thì thử Escape/history.
   async function closeProfileModal() {
+    if (!openedContractorId()) return;
+
+    // Header/nút Back có thể nằm ngoài [data-test-route="modal-profile-details"]. Tìm trong cả
+    // slider trước, rồi toàn document; `.click()` kích hoạt handler của Upwork như một click thật.
     const modal = document.querySelector('[data-test-route="modal-profile-details"]');
-    const backBtn = modal?.querySelector('[data-test="BackButton"]');
+    const backBtn = modal?.closest('.air3-slider')?.querySelector('[data-test="BackButton"]') ||
+      document.querySelector('[data-test="BackButton"]');
     if (backBtn) {
-      backBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    } else {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+      backBtn.click();
+      if (await waitFor(() => !openedContractorId(), 2000)) return;
     }
-    await waitFor(() => !document.querySelector('[data-test-route="modal-profile-details"]'), 4000);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+    if (await waitFor(() => !openedContractorId(), 1500)) return;
+
+    // Modal là một route trong history của trang search. Nếu hai control UI đều thất bại,
+    // quay lại route trước rồi xác nhận URL thật sự đã rời profile.
+    window.history.back();
+    if (await waitFor(() => !openedContractorId(), 3000)) return;
+
+    throw new Error(`Could not close the Upwork profile modal; still on ${window.location.href}`);
   }
 
   function extractStructuredLines(root) {
@@ -465,6 +544,12 @@
           return leads;
         }
 
+        // humanDelay TRƯỚC extractCard (đổi thứ tự so với trước) — thu hẹp khoảng thời gian giữa
+        // lúc đọc card và lúc thật sự click nó, giảm cơ hội Upwork kịp re-render/gán lại node cho
+        // freelancer khác ở giữa (xem bug thật ghi ở openProfileModal()). Không loại bỏ được hoàn
+        // toàn rủi ro (không kiểm soát được Upwork), chỉ giảm cửa sổ thời gian xảy ra.
+        await humanDelay(600, 1500); // giả lập thời gian "nhìn" danh sách trước khi bấm vào 1 card
+
         const lead = extractCard(cards[i]);
         if (!lead) continue;
         // Freelancer đã crawl rồi (quan sát thật 2026-09-23: cùng 1 freelancer bị lặp lại ở ranh
@@ -475,11 +560,10 @@
         if (lead.url) seenUrls.add(lead.url);
 
         const position = `${leads.length + 1}/${limit || cards.length}`;
-        await humanDelay(600, 1500); // giả lập thời gian "nhìn" card trước khi bấm vào
         reportProgress(leads.length + 1, limit || cards.length, `Opening profile ${position}: ${lead.title}`);
 
         try {
-          const modal = await openProfileModal(cards[i]);
+          const modal = await openProfileModal(cards[i], lead.url);
           const rawLength = modal.textContent.length;
           const profileData = extractProfileData(modal, cards[i]);
           const crawledAt = new Date().toISOString(); // ngay sau khi chuẩn hoá xong, không phải lúc gọi AI
@@ -497,11 +581,21 @@
           reportProgress(leads.length + 1, limit || cards.length, `Skipped ${position}: ${lead.title} — ${lead.analysisError}`);
           console.warn('[Hunt-Ex] Skipped profile analysis for', lead.url, '—', lead.analysisError);
         } finally {
-          await closeProfileModal();
+          try {
+            await closeProfileModal();
+          } catch (err) {
+            // Không click card kế tiếp khi route chi tiết vẫn mở: mọi lead sau sẽ gắn nhầm profile.
+            lead.closeError = err.message || String(err);
+            console.warn('[Hunt-Ex] Stopping crawl —', lead.closeError);
+          }
           await humanDelay(800, 2000); // giả lập thời gian nghỉ giữa 2 profile, không lướt liên tục
         }
 
         leads.push(lead);
+        if (lead.closeError) {
+          reportProgress(leads.length, limit || leads.length, `Stopped after ${leads.length} lead(s): ${lead.closeError}`);
+          return leads;
+        }
       }
 
       if (limit && leads.length >= limit) break;

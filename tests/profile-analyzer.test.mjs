@@ -572,3 +572,235 @@ test('rejects missing, empty, name-only, and legacy freelancer input before API 
     globalThis.fetch = originalFetch;
   }
 });
+
+// --- analyzeProfileWithExa (2026-09-28) ----------------------------------------------------------
+// Exa collapses the OpenAI 2-stage identity->contact pipeline into ONE agent run (see the comment
+// block above EXA_INSTRUCTIONS in profile-analyzer.js for why) — validateIdentity()/validateContact()/
+// buildFinalResult() are provider-agnostic, so the SAME verification bar (2+ rare signals or a direct
+// external-link match, trusted contact source) applies regardless of which provider produced `raw`.
+
+const VERIFIED_IDENTITY_AND_CONTACT = {
+  status: 'verified',
+  verified_name: 'Jane Doe',
+  linkedin_url: 'https://www.linkedin.com/in/jane-doe/',
+  website_url: 'https://janedoe.example/',
+  evidence_urls: ['https://janedoe.example/about'],
+  matched_input_signals: ['Rare Commerce Labs', 'Paid Media Strategist'],
+  email: 'jane@janedoe.example',
+  email_type: 'direct',
+  email_source_url: 'https://janedoe.example/contact',
+  phone: null,
+  phone_source_url: null,
+  contact_url: 'https://janedoe.example/contact',
+  contact_source_url: 'https://janedoe.example/contact',
+};
+
+const NOT_FOUND_IDENTITY = {
+  status: 'not_found',
+  verified_name: null,
+  linkedin_url: null,
+  website_url: null,
+  evidence_urls: [],
+  matched_input_signals: [],
+  email: null,
+  email_type: 'direct',
+  email_source_url: null,
+  phone: null,
+  phone_source_url: null,
+  contact_url: null,
+  contact_source_url: null,
+};
+
+function exaRunResponse(structured, overrides = {}) {
+  return {
+    id: 'agent_run_1',
+    object: 'agent_run',
+    status: 'completed',
+    output: { text: '', structured, grounding: [] },
+    usage: { totalAcus: 1 },
+    costDollars: { total: 0.1 },
+    ...overrides,
+  };
+}
+
+test('Exa: posts one combined identity+contact query and maps a verified result through the same validators as OpenAI', async () => {
+  const { analyzeProfileWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let request;
+  let seenUrl;
+  let seenKey;
+
+  globalThis.fetch = async (url, options) => {
+    seenUrl = url;
+    seenKey = options.headers['x-api-key'];
+    request = JSON.parse(options.body);
+    return { ok: true, status: 200, json: async () => exaRunResponse(VERIFIED_IDENTITY_AND_CONTACT) };
+  };
+
+  try {
+    const result = await analyzeProfileWithExa('exa-test-key', {
+      upworkProfileUrl: 'https://www.upwork.com/freelancers/test',
+      profileData: PROFILE_DATA,
+    });
+
+    assert.equal(seenUrl, 'https://api.exa.ai/agent/runs');
+    assert.equal(seenKey, 'exa-test-key');
+    assert.equal(request.effort, 'medium');
+    assert.equal(request.outputSchema.additionalProperties, false);
+    // Merged schema carries both identity AND contact fields in one call (no max_tool_calls-style split).
+    assert.ok(request.outputSchema.required.includes('linkedin_url'));
+    assert.ok(request.outputSchema.required.includes('email'));
+    assert.ok(request.query.includes('Jane D'));
+    assert.ok(request.query.includes('Do not search or cite upwork.com'));
+    // search_queries is an OpenAI-only construct (forces the web_search tool's exact query) — Exa's
+    // agent plans its own search, so it must not appear in the candidate JSON sent to Exa.
+    assert.ok(!request.query.includes('search_queries'));
+
+    assert.equal(result.name, 'Jane Doe');
+    assert.equal(result.linkedin.url, 'https://www.linkedin.com/in/jane-doe/');
+    assert.equal(result.website.url, 'https://janedoe.example/');
+    assert.equal(result.emails[0].value, 'jane@janedoe.example');
+    assert.equal(result.upwork_profile_url, 'https://www.upwork.com/freelancers/test');
+    assert.equal(result.token_usage, null);
+    assert.deepEqual(result.exa_usage, { totalAcus: 1 });
+    assert.deepEqual(result.exa_cost, { total: 0.1 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: leaves every contact field null when identity does not verify', async () => {
+  const { analyzeProfileWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => exaRunResponse(NOT_FOUND_IDENTITY),
+  });
+
+  try {
+    const result = await analyzeProfileWithExa('exa-test-key', {
+      upworkProfileUrl: 'https://www.upwork.com/freelancers/test',
+      profileData: PROFILE_DATA,
+    });
+    assert.equal(result.linkedin.url, null);
+    assert.equal(result.website.url, null);
+    assert.equal(result.emails, null);
+    assert.equal(result.phones, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: retries once when identity is not verified on the first attempt, and keeps the retry when it verifies', async () => {
+  const { analyzeProfileWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let postCount = 0;
+
+  globalThis.fetch = async () => {
+    postCount++;
+    const structured = postCount === 1 ? NOT_FOUND_IDENTITY : VERIFIED_IDENTITY_AND_CONTACT;
+    return { ok: true, status: 200, json: async () => exaRunResponse(structured) };
+  };
+
+  try {
+    const result = await analyzeProfileWithExa('exa-test-key', {
+      upworkProfileUrl: 'https://www.upwork.com/freelancers/test',
+      profileData: PROFILE_DATA,
+    });
+    assert.equal(postCount, 2);
+    assert.equal(result.linkedin.url, 'https://www.linkedin.com/in/jane-doe/');
+    assert.equal(result.emails[0].value, 'jane@janedoe.example');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: does not retry when the first attempt already verifies identity', async () => {
+  const { analyzeProfileWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let postCount = 0;
+
+  globalThis.fetch = async () => {
+    postCount++;
+    return { ok: true, status: 200, json: async () => exaRunResponse(VERIFIED_IDENTITY_AND_CONTACT) };
+  };
+
+  try {
+    await analyzeProfileWithExa('exa-test-key', {
+      upworkProfileUrl: 'https://www.upwork.com/freelancers/test',
+      profileData: PROFILE_DATA,
+    });
+    assert.equal(postCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: keeps the first not-verified result when the retry attempt itself throws', async () => {
+  const { analyzeProfileWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let postCount = 0;
+
+  globalThis.fetch = async () => {
+    postCount++;
+    if (postCount === 1) return { ok: true, status: 200, json: async () => exaRunResponse(NOT_FOUND_IDENTITY) };
+    return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
+  };
+
+  try {
+    const result = await analyzeProfileWithExa('exa-test-key', {
+      upworkProfileUrl: 'https://www.upwork.com/freelancers/test',
+      profileData: PROFILE_DATA,
+    });
+    assert.equal(postCount, 2);
+    assert.equal(result.linkedin.url, null);
+    assert.equal(result.emails, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: rejects incomplete profile data before spending a run', async () => {
+  const { analyzeProfileWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    throw new Error('fetch should not run');
+  };
+
+  try {
+    await assert.rejects(
+      analyzeProfileWithExa('exa-test-key', {
+        upworkProfileUrl: 'https://www.upwork.com/freelancers/test',
+        profileData: { identity: { display_name: 'Jane D.' } },
+      }),
+      /freelancer data is incomplete/i
+    );
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: rejects when apiKey is missing before making any request', async () => {
+  const { analyzeProfileWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    throw new Error('fetch should not run');
+  };
+
+  try {
+    await assert.rejects(
+      analyzeProfileWithExa('', { upworkProfileUrl: 'https://www.upwork.com/freelancers/test', profileData: PROFILE_DATA }),
+      /Exa API key is not configured/
+    );
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

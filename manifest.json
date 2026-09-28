@@ -37,5 +37,5 @@
     }
   ],
   "permissions": ["storage", "activeTab", "downloads", "sidePanel"],
-  "host_permissions": ["https://api.openai.com/*"]
+  "host_permissions": ["https://api.openai.com/*", "https://api.exa.ai/*"]
 }

@@ -653,3 +653,221 @@ test('rejects a name-only seller before spending an API call', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+// --- analyzeFiverrSellerWithExa (2026-09-28) ---------------------------------------------------
+
+const SAMPLE_SELLER_DATA = {
+  list: { sellerName: 'Oleg', gigTitle: 'I will create social media ads' },
+  detail: {
+    username: 'olegchuprina',
+    fiverrName: 'Oleg Chuprina',
+    oneLiner: 'Elite Digital Designer',
+    sellerBio: 'Hi, I’m Oleg Chuprina. 9 years in design.',
+    location: 'Ukraine',
+    categories: ['Graphics & Design', 'Social Media Design'],
+    profileUrl: 'https://www.fiverr.com/olegchuprina',
+    gigUrl: 'https://www.fiverr.com/olegchuprina/design-pro-facebook-banner-ads',
+  },
+};
+
+const EMPTY_RESEARCH_RESULT = {
+  website_url: null,
+  website_source_url: null,
+  email: null,
+  email_type: 'agency',
+  email_source_url: null,
+  linkedin_url: null,
+  linkedin_source_url: null,
+  contact_name: null,
+  contact_phone: null,
+  contact_url: null,
+  contact_source_url: null,
+};
+
+function exaRunResponse(overrides = {}) {
+  return {
+    id: 'agent_run_1',
+    object: 'agent_run',
+    status: 'completed',
+    output: { text: '', structured: EMPTY_RESEARCH_RESULT, grounding: [] },
+    usage: { totalAcus: 1 },
+    costDollars: { total: 0.1 },
+    ...overrides,
+  };
+}
+
+test('Exa: posts the query+outputSchema to /agent/runs with x-api-key auth and medium effort', async () => {
+  const { analyzeFiverrSellerWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let request;
+  let seenUrl;
+  let seenKey;
+
+  globalThis.fetch = async (url, options) => {
+    seenUrl = url;
+    seenKey = options.headers['x-api-key'];
+    request = JSON.parse(options.body);
+    return { ok: true, status: 200, json: async () => exaRunResponse() };
+  };
+
+  try {
+    const result = await analyzeFiverrSellerWithExa('exa-test-key', {
+      fiverrGigUrl: 'https://www.fiverr.com/olegchuprina/design-pro-facebook-banner-ads',
+      crawledAt: '2026-09-25T00:00:00.000Z',
+      sellerData: SAMPLE_SELLER_DATA,
+    });
+
+    assert.equal(seenUrl, 'https://api.exa.ai/agent/runs');
+    assert.equal(seenKey, 'exa-test-key');
+    assert.equal(request.effort, 'medium');
+    assert.equal(request.outputSchema.additionalProperties, false);
+    assert.ok(request.query.includes('Oleg Chuprina'));
+    assert.ok(request.query.includes('Do not search or cite fiverr.com'));
+    assert.equal(result.source, 'fiverr');
+    assert.equal(result.type, 'freelancer');
+    assert.equal(result.fiverr_profile_url, 'https://www.fiverr.com/olegchuprina');
+    assert.equal(result.token_usage, null);
+    assert.deepEqual(result.exa_usage, { totalAcus: 1 });
+    assert.deepEqual(result.exa_cost, { total: 0.1 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: polls GET /agent/runs/{id} until the run leaves queued/running and reads output.structured', async () => {
+  const { analyzeFiverrSellerWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  // Fire the 4s poll-interval sleep immediately — this test only cares about the polling LOOP
+  // logic (keep GETting until a terminal status), not the real wall-clock delay between polls.
+  globalThis.setTimeout = (fn) => originalSetTimeout(fn, 0);
+  let getCalls = 0;
+
+  globalThis.fetch = async (url, options) => {
+    if (options.method === 'POST') {
+      return { ok: true, status: 200, json: async () => ({ id: 'agent_run_1', status: 'queued' }) };
+    }
+    getCalls++;
+    assert.equal(url, 'https://api.exa.ai/agent/runs/agent_run_1');
+    if (getCalls === 1) return { ok: true, status: 200, json: async () => ({ id: 'agent_run_1', status: 'running' }) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => exaRunResponse({ output: { text: '', structured: { ...EMPTY_RESEARCH_RESULT, email: 'oleg@example.com' } } }),
+    };
+  };
+
+  try {
+    const result = await analyzeFiverrSellerWithExa('exa-test-key', {
+      fiverrGigUrl: 'https://www.fiverr.com/olegchuprina/design-pro-facebook-banner-ads',
+      sellerData: SAMPLE_SELLER_DATA,
+    });
+    assert.equal(getCalls, 2);
+    assert.equal(result.emails[0].value, 'oleg@example.com');
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test('Exa: retries once when the first attempt comes back fully empty', async () => {
+  const { analyzeFiverrSellerWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let postCount = 0;
+
+  globalThis.fetch = async (_url, options) => {
+    if (options.method === 'POST') {
+      postCount++;
+      const structured =
+        postCount === 1 ? EMPTY_RESEARCH_RESULT : { ...EMPTY_RESEARCH_RESULT, website_url: 'https://oleg.example/' };
+      return { ok: true, status: 200, json: async () => exaRunResponse({ output: { text: '', structured } }) };
+    }
+    throw new Error('should not poll — POST already returns a terminal status in this test');
+  };
+
+  try {
+    const result = await analyzeFiverrSellerWithExa('exa-test-key', {
+      fiverrGigUrl: 'https://www.fiverr.com/olegchuprina/design-pro-facebook-banner-ads',
+      sellerData: SAMPLE_SELLER_DATA,
+    });
+    assert.equal(postCount, 2);
+    assert.equal(result.website.url, 'https://oleg.example/');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: strips a fiverr.com URL the agent returns despite the soft no-fiverr instruction', async () => {
+  const { analyzeFiverrSellerWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () =>
+      exaRunResponse({
+        output: {
+          text: '',
+          structured: { ...EMPTY_RESEARCH_RESULT, website_url: 'https://www.fiverr.com/olegchuprina', linkedin_url: 'https://linkedin.com/in/oleg' },
+        },
+      }),
+  });
+
+  try {
+    const result = await analyzeFiverrSellerWithExa('exa-test-key', {
+      fiverrGigUrl: 'https://www.fiverr.com/olegchuprina/design-pro-facebook-banner-ads',
+      sellerData: SAMPLE_SELLER_DATA,
+    });
+    assert.equal(result.website.url, null);
+    assert.equal(result.linkedin.url, 'https://linkedin.com/in/oleg');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: surfaces a clear error when the run ends with status "failed"', async () => {
+  const { analyzeFiverrSellerWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      id: 'agent_run_1',
+      status: 'failed',
+      error: { code: 'TIMEOUT', message: 'The run timed out.' },
+    }),
+  });
+
+  try {
+    await assert.rejects(
+      analyzeFiverrSellerWithExa('exa-test-key', {
+        fiverrGigUrl: 'https://www.fiverr.com/olegchuprina/design-pro-facebook-banner-ads',
+        sellerData: SAMPLE_SELLER_DATA,
+      }),
+      /failed.*timed out/is
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: rejects when apiKey is missing before making any request', async () => {
+  const { analyzeFiverrSellerWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    throw new Error('fetch should not run');
+  };
+
+  try {
+    await assert.rejects(
+      analyzeFiverrSellerWithExa('', { sellerData: SAMPLE_SELLER_DATA }),
+      /Exa API key is not configured/
+    );
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -75,3 +75,75 @@ test('surfaces network errors instead of throwing', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('testExaApiKey reports ok:true and sends the key via x-api-key when Exa responds 200', async () => {
+  const { testExaApiKey } = await loadKeyTester();
+  const originalFetch = globalThis.fetch;
+  let seenUrl;
+  let seenMethod;
+  let seenKey;
+  globalThis.fetch = async (url, options) => {
+    seenUrl = url;
+    seenMethod = options.method;
+    seenKey = options.headers['x-api-key'];
+    return { ok: true, status: 200, json: async () => ({ data: [] }) };
+  };
+  try {
+    const result = await testExaApiKey('exa-test-123');
+    assert.deepEqual(result, { ok: true });
+    assert.equal(seenUrl, 'https://api.exa.ai/agent/runs?limit=1');
+    assert.equal(seenMethod, 'GET');
+    assert.equal(seenKey, 'exa-test-123');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('testExaApiKey reports a clear "invalid key" error on 401', async () => {
+  const { testExaApiKey } = await loadKeyTester();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 401,
+    json: async () => ({ requestId: 'r1', error: 'Invalid API key.', tag: 'INVALID_API_KEY' }),
+  });
+  try {
+    const result = await testExaApiKey('exa-bad');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /invalid api key/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('testExaApiKey distinguishes a valid-but-out-of-credits key on 402', async () => {
+  const { testExaApiKey } = await loadKeyTester();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 402,
+    json: async () => ({ error: 'No more credits.', tag: 'NO_MORE_CREDITS' }),
+  });
+  try {
+    const result = await testExaApiKey('exa-test');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /no more credits/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('testExaApiKey surfaces network errors instead of throwing', async () => {
+  const { testExaApiKey } = await loadKeyTester();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error('network down');
+  };
+  try {
+    const result = await testExaApiKey('exa-test');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /network down/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

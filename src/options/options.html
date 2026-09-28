@@ -13,8 +13,26 @@
     </header>
 
     <section class="card">
-      <label for="apikey-input">OpenAI API key</label>
-      <input id="apikey-input" type="password" placeholder="sk-..." autocomplete="off" />
+      <label for="research-provider">Research provider (used to find public contact info for leads)</label>
+      <select id="research-provider">
+        <option value="openai">OpenAI (GPT)</option>
+        <option value="exa">Exa.ai</option>
+      </select>
+      <p class="hint">
+        LinkedIn's "Analyze with AI" step always uses the OpenAI key below, regardless of this
+        selection — it doesn't do web research.
+      </p>
+
+      <div id="openai-key-fields">
+        <label for="apikey-input">OpenAI API key</label>
+        <input id="apikey-input" type="password" placeholder="sk-..." autocomplete="off" />
+      </div>
+
+      <div id="exa-key-fields" hidden>
+        <label for="exa-apikey-input">Exa API key</label>
+        <input id="exa-apikey-input" type="password" placeholder="Exa API key" autocomplete="off" />
+      </div>
+
       <button id="apikey-test-btn" class="btn btn-ghost">Test key</button>
       <p id="apikey-test-status" class="status"></p>
     </section>

@@ -30,3 +30,42 @@ export async function testApiKey(apiKey) {
   }
   return { ok: false, error: detail || `OpenAI returned HTTP ${response.status}.` };
 }
+
+// Kiểm tra 1 Exa API key còn dùng được không (2026-09-28, Exa là provider thứ 2 cho phần research —
+// xem src/shared/api-key-store.js). Exa KHÔNG có endpoint account-info/models sạch tương đương
+// OpenAI's /v1/models (xác nhận qua research 2026-09-28: /v0/teams/me trong doc bị lệch path thật,
+// Team Management API cần loại key riêng khác hẳn). Dùng GET /agent/runs?limit=1 (list run) thay
+// thế — cùng auth với /agent/runs thật, KHÔNG tạo run mới nên không tốn phí (chỉ create run mới bị
+// tính phí theo doc pricing/billing), 200 nghĩa là key hợp lệ dù danh sách rỗng.
+export async function testExaApiKey(apiKey) {
+  let response;
+  try {
+    response = await fetch('https://api.exa.ai/agent/runs?limit=1', {
+      method: 'GET',
+      headers: { 'x-api-key': apiKey },
+    });
+  } catch (err) {
+    return { ok: false, error: `Network error — ${err.message || err}` };
+  }
+
+  if (response.ok) return { ok: true };
+
+  let detail = '';
+  try {
+    const body = await response.json();
+    detail = body?.error || '';
+  } catch {
+    // Body không phải JSON hợp lệ — bỏ qua, dùng fallback theo status bên dưới.
+  }
+
+  if (response.status === 401) {
+    return { ok: false, error: detail || 'Invalid API key (Exa returned 401 Unauthorized).' };
+  }
+  if (response.status === 402) {
+    return { ok: false, error: detail || 'Exa key is valid but out of credits or over its spending budget (HTTP 402).' };
+  }
+  if (response.status === 429) {
+    return { ok: false, error: detail || 'Exa rate limit hit while testing the key (HTTP 429) — the key itself may still be valid.' };
+  }
+  return { ok: false, error: detail || `Exa returned HTTP ${response.status}.` };
+}

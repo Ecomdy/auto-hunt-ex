@@ -426,3 +426,195 @@ test('rejects a name-only agency before spending an API call', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+// --- analyzeAgencyWithExa (2026-09-28) ----------------------------------------------------------
+
+const EMPTY_AGENCY_RESEARCH_RESULT = {
+  name: null,
+  website_url: null,
+  website_source_url: null,
+  email: null,
+  email_type: 'agency',
+  email_source_url: null,
+  linkedin_url: null,
+  linkedin_source_url: null,
+  contact_name: null,
+  contact_phone: null,
+  contact_url: null,
+  contact_source_url: null,
+};
+
+function exaRunResponse(overrides = {}) {
+  return {
+    id: 'agent_run_1',
+    object: 'agent_run',
+    status: 'completed',
+    output: { text: '', structured: EMPTY_AGENCY_RESEARCH_RESULT, grounding: [] },
+    usage: { totalAcus: 1 },
+    costDollars: { total: 0.1 },
+    ...overrides,
+  };
+}
+
+test('Exa: posts the query+outputSchema to /agent/runs with x-api-key auth and medium effort', async () => {
+  const { analyzeAgencyWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let request;
+  let seenUrl;
+  let seenKey;
+
+  globalThis.fetch = async (url, options) => {
+    seenUrl = url;
+    seenKey = options.headers['x-api-key'];
+    request = JSON.parse(options.body);
+    return { ok: true, status: 200, json: async () => exaRunResponse() };
+  };
+
+  try {
+    const result = await analyzeAgencyWithExa('exa-test-key', {
+      upworkAgencyUrl: 'https://www.upwork.com/agencies/895274624278921216/',
+      crawledAt: '2026-09-24T00:00:00.000Z',
+      agencyData: { upworkName: 'Appsysco Marketing', overview: 'Performance marketing for ecommerce brands.', location: 'Mohali, India' },
+    });
+
+    assert.equal(seenUrl, 'https://api.exa.ai/agent/runs');
+    assert.equal(seenKey, 'exa-test-key');
+    assert.equal(request.effort, 'medium');
+    assert.equal(request.outputSchema.additionalProperties, false);
+    assert.ok(request.query.includes('Appsysco Marketing'));
+    assert.ok(request.query.includes('Do not search or cite upwork.com'));
+    assert.equal(result.source, 'upwork');
+    assert.equal(result.type, 'agency');
+    assert.equal(result.name, 'Appsysco Marketing');
+    assert.equal(result.upwork_profile_url, 'https://www.upwork.com/agencies/895274624278921216/');
+    assert.equal(result.token_usage, null);
+    assert.deepEqual(result.exa_usage, { totalAcus: 1 });
+    assert.deepEqual(result.exa_cost, { total: 0.1 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: retries once when the first attempt comes back fully empty, and keeps the second result if it found something', async () => {
+  const { analyzeAgencyWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let postCount = 0;
+
+  globalThis.fetch = async (_url, options) => {
+    postCount++;
+    const structured =
+      postCount === 1 ? EMPTY_AGENCY_RESEARCH_RESULT : { ...EMPTY_AGENCY_RESEARCH_RESULT, website_url: 'https://example.com/' };
+    return { ok: true, status: 200, json: async () => exaRunResponse({ output: { text: '', structured } }) };
+  };
+
+  try {
+    const result = await analyzeAgencyWithExa('exa-test-key', {
+      upworkAgencyUrl: 'https://www.upwork.com/agencies/1/',
+      agencyData: { upworkName: 'Acme', overview: 'A small agency.' },
+    });
+    assert.equal(postCount, 2);
+    assert.equal(result.website.url, 'https://example.com/');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: does not retry when the first attempt already found a contact', async () => {
+  const { analyzeAgencyWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let postCount = 0;
+
+  globalThis.fetch = async () => {
+    postCount++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => exaRunResponse({ output: { text: '', structured: { ...EMPTY_AGENCY_RESEARCH_RESULT, website_url: 'https://example.com/' } } }),
+    };
+  };
+
+  try {
+    await analyzeAgencyWithExa('exa-test-key', {
+      upworkAgencyUrl: 'https://www.upwork.com/agencies/1/',
+      agencyData: { upworkName: 'Acme', overview: 'A small agency.' },
+    });
+    assert.equal(postCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: strips an upwork.com URL the agent returns despite the soft no-upwork instruction', async () => {
+  const { analyzeAgencyWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () =>
+      exaRunResponse({
+        output: {
+          text: '',
+          structured: {
+            ...EMPTY_AGENCY_RESEARCH_RESULT,
+            website_url: 'https://www.upwork.com/agencies/1/',
+            linkedin_url: 'https://www.linkedin.com/company/acme-studio/',
+          },
+        },
+      }),
+  });
+
+  try {
+    const result = await analyzeAgencyWithExa('exa-test-key', {
+      upworkAgencyUrl: 'https://www.upwork.com/agencies/1/',
+      agencyData: { upworkName: 'Acme', overview: 'A small agency.' },
+    });
+    assert.equal(result.website.url, null);
+    assert.equal(result.linkedin.url, 'https://www.linkedin.com/company/acme-studio/');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: surfaces a clear error when the run ends with status "failed"', async () => {
+  const { analyzeAgencyWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ id: 'agent_run_1', status: 'failed', error: { code: 'TIMEOUT', message: 'The run timed out.' } }),
+  });
+
+  try {
+    await assert.rejects(
+      analyzeAgencyWithExa('exa-test-key', {
+        upworkAgencyUrl: 'https://www.upwork.com/agencies/1/',
+        agencyData: { upworkName: 'Acme', overview: 'A small agency.' },
+      }),
+      /failed.*timed out/is
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Exa: rejects when apiKey is missing before making any request', async () => {
+  const { analyzeAgencyWithExa } = await loadAnalyzer();
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    throw new Error('fetch should not run');
+  };
+
+  try {
+    await assert.rejects(
+      analyzeAgencyWithExa('', { agencyData: { upworkName: 'Acme', overview: 'A small agency.' } }),
+      /Exa API key is not configured/
+    );
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

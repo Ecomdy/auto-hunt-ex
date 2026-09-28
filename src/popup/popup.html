@@ -17,12 +17,30 @@
     <main>
       <section class="card" id="apikey-view" hidden>
         <p class="hint-text" style="margin-top: 0">
-          Hunt-Ex needs an OpenAI API key to analyze search intent and research leads. Paste your
-          key below to get started.
+          Hunt-Ex needs an API key to research public contact info for leads. Choose a provider and
+          paste your key below to get started.
         </p>
-        <label for="apikey-input">OpenAI API key</label>
-        <input id="apikey-input" type="password" placeholder="sk-..." autocomplete="off" />
+
+        <div class="radio-group">
+          <label class="radio-option"><input type="radio" name="apikey-provider" value="openai" checked /> OpenAI (GPT)</label>
+          <label class="radio-option"><input type="radio" name="apikey-provider" value="exa" /> Exa.ai</label>
+        </div>
+
+        <div id="openai-key-fields">
+          <label for="apikey-input">OpenAI API key</label>
+          <input id="apikey-input" type="password" placeholder="sk-..." autocomplete="off" />
+        </div>
+
+        <div id="exa-key-fields" hidden>
+          <label for="exa-apikey-input">Exa API key</label>
+          <input id="exa-apikey-input" type="password" placeholder="Exa API key" autocomplete="off" />
+        </div>
+
         <button id="apikey-save-btn" class="btn btn-primary btn-block">Save &amp; test key</button>
+        <p class="hint-text">
+          LinkedIn's "Analyze with AI" step always uses an OpenAI key, regardless of this choice —
+          add one later in Settings if you plan to use LinkedIn while Exa is selected here.
+        </p>
       </section>
 
       <section class="card" id="home-view" hidden>

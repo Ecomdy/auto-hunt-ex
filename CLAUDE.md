@@ -10,25 +10,38 @@ như viết ra (giữ đơn giản, dễ debug qua `chrome://extensions`).
 manifest.json
 src/
   background/           # service worker (ES module, "type": "module")
-    background.js        # message router: ANALYZE_INTENT / ANALYZE_PROFILE / ANALYZE_AGENCY / SAVE_LEADS /
-                           # GET_LEADS / CLEAR_LEADS / GET_API_KEY_STATUS / SAVE_API_KEY / TEST_API_KEY
-                           # (3 message cuối, 2026-09-25 — xem mục "OpenAI API key"). Model OpenAI hardcode
-                           # thẳng ở đây (const GPT_MODEL), không còn đọc từ file config nào nữa.
-    ai/key-tester.js      # testApiKey() — gọi GET /v1/models để kiểm tra 1 key còn dùng được không,
-                           # KHÔNG tốn token (khác intent/profile/agency/fiverr-analyzer.js đều gọi
-                           # /v1/responses thật). Dùng cho nút "Test key" (side panel lúc onboarding +
-                           # Settings lúc đổi key). Tự chứa, không import gì.
-    ai/intent-analyzer.js # gọi thẳng OpenAI Responses API (fetch từ browser)
+    background.js        # message router: ANALYZE_INTENT / ANALYZE_PROFILE / ANALYZE_AGENCY /
+                           # ANALYZE_FIVERR / SAVE_LEADS / GET_LEADS / CLEAR_LEADS / GET_API_KEY_STATUS /
+                           # SAVE_API_KEY / TEST_API_KEY (3 message cuối, 2026-09-25 — xem mục "OpenAI
+                           # API key"; cả 3 nhận thêm `provider` từ 2026-09-28, xem "Research provider").
+                           # Model OpenAI hardcode thẳng ở đây (const GPT_MODEL), không còn đọc từ file
+                           # config nào nữa. ANALYZE_PROFILE/AGENCY/FIVERR (2026-09-28) tự dispatch
+                           # OpenAI hay Exa qua requireResearchApiKey() theo research provider đang chọn.
+    ai/key-tester.js      # testApiKey() — gọi GET /v1/models để kiểm tra 1 OpenAI key còn dùng được
+                           # không, KHÔNG tốn token (khác intent/profile/agency/fiverr-analyzer.js đều
+                           # gọi /v1/responses thật). testExaApiKey() (2026-09-28) — cùng việc cho Exa,
+                           # gọi GET /agent/runs?limit=1 (Exa không có endpoint account-info/models sạch
+                           # tương đương, xem mục "Research provider"). Dùng cho nút "Test key" (side
+                           # panel lúc onboarding + Settings lúc đổi key). Tự chứa, không import gì.
+    ai/intent-analyzer.js # gọi thẳng OpenAI Responses API (fetch từ browser) — LUÔN OpenAI, không đổi
+                           # theo research provider (xem mục "Research provider" — bước này không search
+                           # web nên không nằm trong lựa chọn OpenAI/Exa).
     ai/profile-analyzer.js # phân tích 1 profile Upwork (freelancer) đã crawl -> tìm contact info công khai
                            # (tool web_search, tool_choice: 'required') — xem TODO cuối file (tool
-                           # web_search_preview cũ đã verify live, bản web_search mới CHƯA re-verify)
+                           # web_search_preview cũ đã verify live, bản web_search mới CHƯA re-verify).
+                           # Thêm analyzeProfileWithExa() (2026-09-28) — nhánh Exa.ai, gộp pipeline
+                           # 2 stage OpenAI (identity rồi contact) thành 1 lần gọi Exa Agent duy nhất,
+                           # tái dùng validateIdentity()/validateContact()/buildFinalResult() nguyên vẹn
+                           # (provider-agnostic, chỉ đọc JSON đã parse). Xem mục "Research provider".
     ai/agency-analyzer.js # y hệt profile-analyzer.js nhưng cho AGENCY (2026-09-24) — CÙNG 1 output
                            # schema với freelancer (theo yêu cầu user, xem TODO cuối CLAUDE.md), tự chứa
                            # (KHÔNG import chung với profile-analyzer.js — lý do xem comment đầu file:
-                           # test load qua data: URL base64, import tương đối từ đó sẽ vỡ)
+                           # test load qua data: URL base64, import tương đối từ đó sẽ vỡ). Thêm
+                           # analyzeAgencyWithExa() (2026-09-28) — xem mục "Research provider".
     ai/fiverr-analyzer.js  # phân tích 1 Fiverr seller đã crawl (2026-09-25) — mô phỏng agency-analyzer.js
                            # (1 stage, input thưa tương tự: name/bio/location/service), CÙNG output
                            # schema, tự chứa. source: 'fiverr', type: 'freelancer'. Xem TODO cuối CLAUDE.md.
+                           # Thêm analyzeFiverrSellerWithExa() (2026-09-28) — xem mục "Research provider".
     leads/               # Repository pattern — swap local <-> backend không sửa code gọi
       lead-repository.js         # factory, đọc setting huntexLeadStorageMode
       local-lead-repository.js   # chrome.storage.session (mặc định, dùng để test — user yêu cầu
@@ -61,11 +74,13 @@ src/
                            # khác), xem TODO cuối CLAUDE.md.
   popup/                 # UI chính, hiển thị dưới dạng SIDE PANEL (không phải popup dropdown — xem bên dưới)
                            # nhập mô tả khách hàng -> AI phân tích -> crawl -> xem/xuất lead. Mở panel lần
-                           # đầu (chưa lưu API key) -> chặn ở `#apikey-view` trước cả `#home-view`, xem
-                           # mục "OpenAI API key".
-  options/                # Settings — có ô nhập/đổi API key OpenAI (+ nút "Test key") VÀ cấu hình nơi
-                           # lưu lead (mode local/remote). Trước 2026-09-25 KHÔNG có ô API key (key nạp
-                           # sẵn qua .env lúc build) — xem mục "OpenAI API key" cho lý do đổi.
+                           # đầu (chưa lưu key của research provider đang chọn) -> chặn ở `#apikey-view`
+                           # trước cả `#home-view`, xem mục "OpenAI API key" + "Research provider".
+  options/                # Settings — chọn Research provider (OpenAI/Exa.ai) + nhập/đổi key tương ứng
+                           # (nút "Test key" riêng) VÀ cấu hình nơi lưu lead (mode local/remote). Trước
+                           # 2026-09-25 KHÔNG có ô API key nào (key nạp sẵn qua .env lúc build); trước
+                           # 2026-09-28 chỉ có đúng 1 provider (OpenAI) — xem mục "OpenAI API key" +
+                           # "Research provider" cho lý do đổi.
   shared/
     platforms.js          # registry platform (dùng ở background + popup, KHÔNG dùng trong content script)
                            # mỗi platform có searchUrlTemplate — null nghĩa là CHƯA xác nhận URL search
@@ -78,8 +93,12 @@ src/
                            # nguyên filter này. directSearch: true (hiện chỉ Upwork) -> popup ẩn hẳn
                            # bước "Analyze with AI" (mô tả tự nhiên -> AI diễn giải), user gõ thẳng câu
                            # search vào ô search-query rồi bấm Auto-hunt luôn (quyết định 2026-09-23).
-    api-key-store.js      # get/setApiKey() qua chrome.storage.sync — nguồn sự thật DUY NHẤT cho
-                           # OpenAI API key (2026-09-25). Trước đó là `shared/config.js` (đã xoá).
+    api-key-store.js      # get/setOpenAiApiKey()/get/setExaApiKey() qua chrome.storage.sync — nguồn
+                           # sự thật DUY NHẤT cho API key của từng provider (2026-09-25, đổi tên hàm
+                           # 2026-09-28 khi thêm Exa — trước đó tên get/setApiKey() vì chỉ có OpenAI).
+                           # get/setResearchProvider() (2026-09-28) — provider đang chọn cho phần
+                           # research (contact-finding), mặc định 'openai'. Trước `api-key-store.js`
+                           # là `shared/config.js` (đã xoá). Xem mục "Research provider".
 ```
 
 ## OpenAI API key
@@ -142,6 +161,122 @@ chính user, Google mã hoá lúc truyền/lưu nhưng KHÔNG phải bảo mật
 tự giữ key, không tương đương biến môi trường phía server, không bao giờ rời máy/tài khoản
 Chrome của user). Nếu cần bảo mật hơn: chuyển gọi OpenAI qua backend nội bộ Ecomdy (khi có) thay
 vì gọi thẳng từ extension.
+
+## Research provider: OpenAI vs Exa.ai
+
+**Thêm 2026-09-28 (theo yêu cầu user):** trước đây phần "research" (tìm public contact info cho
+freelancer/agency/Fiverr seller — 3 message `ANALYZE_PROFILE`/`ANALYZE_AGENCY`/`ANALYZE_FIVERR`)
+CHỈ dùng OpenAI. Giờ user chọn được 1 trong 2 provider — OpenAI (GPT) hoặc **Exa.ai** (Agent API,
+`POST https://api.exa.ai/agent/runs`) — nhập key tương ứng, extension tự dùng đúng provider đó cho
+cả 3 luồng research. Đây là lựa chọn **toàn cục** (1 provider active tại 1 thời điểm cho cả
+Upwork freelancer/agency lẫn Fiverr), không phải theo từng platform.
+
+**`ANALYZE_INTENT` (mô tả khách hàng -> search query, dùng cho LinkedIn) KHÔNG nằm trong lựa chọn
+này** — bước đó không gọi web search (chỉ diễn giải câu mô tả), nên LUÔN dùng OpenAI bất kể research
+provider đang chọn là gì (`requireOpenAiApiKey()` riêng trong `background.js`, tách khỏi
+`requireResearchApiKey()`). Hệ quả: user chỉ nhập key Exa (không có key OpenAI) vẫn dùng được Upwork/
+Fiverr, nhưng LinkedIn (platform duy nhất còn dùng `ANALYZE_INTENT`) sẽ báo lỗi rõ ràng yêu cầu nhập
+thêm key OpenAI — đã ghi rõ trong hint text của `#apikey-view` (popup) và `options.html`.
+
+### Lưu trữ + message contract
+
+`src/shared/api-key-store.js`: 2 storage key riêng biệt (`huntexOpenAiApiKey`/`huntexExaApiKey`,
+đều qua `chrome.storage.sync`, đổi provider qua lại không mất key kia) + 1 storage key chọn provider
+đang active (`huntexResearchProvider`, giá trị `'openai'`/`'exa'`, mặc định `'openai'` nếu chưa từng
+chọn — giữ nguyên hành vi cho user đã có sẵn key OpenAI từ trước bản Exa này).
+
+`background.js` message contract đổi (xem comment đầu file):
+- `GET_API_KEY_STATUS` -> `{provider, hasKey}` (trước đây chỉ `{hasKey}`) — `hasKey` là của ĐÚNG
+  provider đang chọn. Panel dùng để quyết định hiện `#apikey-view` hay `#home-view`, VÀ chọn sẵn
+  đúng radio provider trong gate (`setApiKeyProviderView()`).
+- `SAVE_API_KEY {provider, apiKey}` -> lưu key cho `provider` VÀ đặt luôn `provider` đó làm research
+  provider đang dùng — chọn provider nào lúc lưu key nghĩa là dùng luôn provider đó (đúng flow user
+  mô tả: "chọn cái nào thì cho nhập token tương ứng rồi triển khai theo flow thôi").
+- `TEST_API_KEY {provider?, apiKey?}` -> `provider` bỏ trống thì dùng provider đang lưu; `apiKey` bỏ
+  trống thì test đúng key đang lưu của provider đó.
+
+`requireResearchApiKey()` (background.js) đọc provider đang chọn + key tương ứng, throw lỗi rõ ràng
+nếu thiếu key (tên provider trong message lỗi). 3 handler `ANALYZE_PROFILE`/`ANALYZE_AGENCY`/
+`ANALYZE_FIVERR` gọi hàm này rồi dispatch `analyze*()` (OpenAI) hoặc `analyze*WithExa()` (Exa) theo
+`provider` trả về. Cache freelancer (`profile-research-cache.js`) dùng `EXA_MODEL_ID = 'exa-agent'`
+thay `GPT_MODEL` làm 1 phần cache key khi provider là Exa — đổi qua lại 2 provider không lẫn cache.
+
+### UI
+
+- **Onboarding** (`popup.html`/`popup.js`, `#apikey-view`): thêm radio "OpenAI (GPT)"/"Exa.ai" phía
+  trên 2 ô input (`#openai-key-fields`/`#exa-key-fields`, ẩn/hiện theo radio qua
+  `setApiKeyProviderView()`) — chỉ CẦN NHẬP ĐÚNG 1 KEY của provider đã chọn, không bắt buộc cả 2. Nút
+  "Save & test key" giữ nguyên hành vi cũ (test trước, chỉ lưu nếu pass) nhưng giờ gửi kèm `provider`.
+- **Settings** (`options.html`/`options.js`): thêm `<select id="research-provider">` (tái dùng đúng
+  vòng `load()`/generic `FIELDS` đã có, thêm 3 dòng: `research-provider`/`apikey-input`/
+  `exa-apikey-input` — không cần code riêng, đúng quy ước cũ). Đổi `<select>` -> ẩn/hiện đúng khối
+  key tương ứng qua `updateProviderFieldsVisibility()`. Nút "Test key" đọc `provider` từ `<select>`
+  hiện tại (không phải provider đã lưu) + giá trị đang gõ trong ô tương ứng — cho phép test 1 provider
+  trước khi quyết định chuyển hẳn sang nó.
+
+### Exa Agent API — cơ chế + quyết định thiết kế
+
+Research kỹ trước khi code (đọc `exa-spec.yaml`, `quickstart`/`best-practices` chính thức Exa +
+live-test vài request thật với key sai, 2026-09-28) vì user yêu cầu không đoán:
+
+- **Bất đồng bộ, KHÔNG dùng SSE**: `POST /agent/runs` (header `x-api-key`, body `{query,
+  outputSchema, effort}`, KHÔNG gửi `Accept: text/event-stream`) trả về NGAY `{id, status: 'queued'|
+  'running'}` — chưa phải kết quả cuối. Phải `GET /agent/runs/{id}` lặp lại (poll mỗi 4s, timeout
+  tổng 120s) tới khi `status` là `completed`/`failed`/`cancelled`. Chọn nhánh non-streaming vì service
+  worker MV3 tự parse SSE thủ công phức tạp hơn hẳn poll JSON thường, và poll GET không tính vào giới
+  hạn QPS (5 QPS/50 concurrent run cho riêng `/agent/runs`, theo doc billing).
+- **`outputSchema` là JSON Schema chuẩn** — tái dùng NGUYÊN các schema nội bộ đã có sẵn cho OpenAI
+  Structured Outputs (`OUTPUT_SCHEMA` ở agency/fiverr-analyzer.js) mà không cần định nghĩa lại.
+  Lưu ý: Exa có thể trả `null` cho field dù đánh dấu `required` trong schema (không "strict" như
+  OpenAI) — vô hại vì `normalizeResearchResult()`/`validateIdentity()`/`validateContact()` vốn đã
+  null-safe cho mọi field.
+- **`effort: 'medium'`** — theo khuyến nghị chính thức Exa cho "standard single-entity research"
+  (đúng loại việc đang làm: xác minh + tìm contact 1 freelancer/agency/seller), áp dụng thống nhất
+  cho cả 3 luồng, KHÔNG lên UI cho user chọn (cùng tinh thần `GPT_MODEL` không lên UI).
+- **KHÔNG có domain/location filter cứng cho Agent API** (khác hẳn OpenAI web_search's
+  `filters.allowed_domains`/`blocked_domains`/`user_location` — xác nhận qua đọc hết
+  `exa-spec.yaml`/docs, không có param nào tương đương). Bù lại bằng 2 lớp:
+  1. Soft instruction trong `query` ("Do not search or cite upwork.com"/"...fiverr.com").
+  2. Lớp phòng thủ cứng `stripUpworkUrl()`/`stripFiverrUrl()` (agency/fiverr-analyzer.js) — tự strip
+     bất kỳ URL nào trỏ về chính platform nguồn khỏi kết quả, bất kể model có tuân theo soft
+     instruction hay không. `profile-analyzer.js` không cần thêm hàm riêng vì `normalizeUrl()` (dùng
+     chung cho cả 2 provider) đã strip `upwork.com` từ trước.
+- **Test key** (`testExaApiKey()`, `key-tester.js`): Exa KHÔNG có endpoint account-info/models sạch
+  tương đương OpenAI's `GET /v1/models` (đã thử `/v0/teams/me` theo doc — path thật lệch khỏi doc,
+  không dùng được; Team Management API cần loại key riêng khác hẳn, không hợp cho user thường). Dùng
+  `GET /agent/runs?limit=1` (list run) thay thế — cùng auth, KHÔNG tạo run mới nên không tốn phí, 200
+  nghĩa là key hợp lệ. Phân biệt rõ 3 mã lỗi: 401 (key sai), 402 (key đúng nhưng hết credit/budget),
+  429 (rate limit, key có thể vẫn đúng).
+- **Freelancer: gộp pipeline 2 stage (OpenAI) thành 1 run duy nhất cho Exa.** OpenAI's `web_search`
+  tool bị giới hạn cứng bởi `max_tool_calls`, nên phải tách identity/contact thành 2 request riêng,
+  mỗi request ép đúng 1 query code tự dựng. Exa Agent KHÔNG có giới hạn kiểu đó — 1 run tự lên kế
+  hoạch và chạy nhiều bước search bên trong (đúng bản chất "agent"), nên `analyzeProfileWithExa()`
+  gộp identity + contact vào ĐÚNG 1 `query` (`EXA_INSTRUCTIONS`, 2 bước diễn giải bằng lời: "Step 1
+  identity... Step 2 contact (chỉ chạy nếu Step 1 verified)...") + 1 `outputSchema` gộp (`EXA_SCHEMA`
+  = union field của `IDENTITY_SCHEMA`+`CONTACT_SCHEMA`) — rẻ hơn (1 run thay vì tối đa 4 request
+  OpenAI) và tự nhiên hơn với cách Exa Agent hoạt động. `validateIdentity()`/`validateContact()`/
+  `buildFinalResult()` HOÀN TOÀN không đổi (provider-agnostic, chỉ đọc JSON đã parse theo field name)
+  — cùng ngưỡng verify chặt y hệt OpenAI (2+ signal hiếm hoặc direct external-link match, contact
+  source phải khớp identity đã verify). `search_queries` (field OpenAI-only, ép `web_search` tool
+  chạy đúng 1 câu) bị loại khỏi candidate JSON gửi Exa — Exa tự lên chiến lược search, không nên nhận
+  field này (tránh model hiểu lầm phải chạy đúng các query đó thay vì tự tìm cách tốt nhất).
+- **Retry-khi-rỗng/chưa-verify đúng 1 lần** — agency/fiverr retry khi `isEmptyResult()`; freelancer
+  retry khi identity chưa `verified` — CÙNG tinh thần cơ chế đã có cho OpenAI (sampling variance),
+  áp dụng phòng ngừa trước cho Exa dù CHƯA verify live để biết Exa có cùng vấn đề variance hay không.
+- **Chi phí**: `result.token_usage = null` cho nhánh Exa (Exa không có khái niệm token — billing
+  theo Agent Compute Unit/search-call/effort cố định, xem `exa.ai/docs/admin/pricing`) — thay vào đó
+  `result.exa_usage`/`result.exa_cost` giữ NGUYÊN object `usage`/`costDollars` Exa trả về, log kèm
+  console vì CHƯA verify live nên chưa biết chắc shape chính xác từng field con.
+
+### CHƯA verify live
+
+Toàn bộ nhánh Exa (`analyzeProfileWithExa`/`analyzeAgencyWithExa`/`analyzeFiverrSellerWithExa`,
+`testExaApiKey`, UI onboarding/Settings) mới chỉ chạy qua `node --test` với `fetch` mock — CHƯA gọi
+Exa API thật bằng key thật. Cần user tự nhập 1 Exa API key thật rồi chạy Auto-hunt Upwork/Fiverr với
+Exa được chọn để xác nhận: request/response thật đúng như research (đặc biệt shape `usage`/
+`costDollars`, số vòng poll thực tế mất bao lâu cho 1 run effort medium), soft no-domain-instruction
+có đủ hiệu quả không (hay phải dựa hoàn toàn vào lớp `stripUpworkUrl`/`stripFiverrUrl`), và hit-rate/
+chi phí thực tế so với OpenAI (`gpt-5.6-terra`) trên cùng 1 batch lead để so sánh — xem TODO cuối file.
 
 ## UI: Side Panel, không phải popup
 
@@ -365,6 +500,97 @@ Lead shape dùng xuyên suốt: `{ platform, title, url, snippet, postedAt, extr
       phần tử sai là no-op vô hại). Các con số 2.5s/10s vẫn là ước lượng, không có cách biết chắc
       100% Upwork mất bao lâu — nếu sau này lại thấy `profile_text` ngắn/thiếu, tăng số lên tiếp chứ
       không đổi cách tiếp cận.
+      **Bug thật gặp lúc chạy live (batch Exa, sau khi thêm research provider Exa.ai) — nghiêm
+      trọng, đã sửa**: nhiều freelancer LIÊN TIẾP có `about`/`portfolio`/`education` Y HỆT NHAU
+      (của người mở modal TRƯỚC), phát hiện qua log input gửi Exa (`profile-analyzer.js`) —
+      `name`/`headline`/`location` (đọc từ card ngoài list, KHÔNG phải modal) vẫn đúng riêng từng
+      người, chỉ phần đọc từ MODAL bị lẫn. Nguyên nhân: `waitForModalContentStable()` cũ chỉ coi
+      "ổn định" là "length không đổi giữa 2 lần đo" — nếu Upwork TÁI DÙNG cùng 1 DOM node của
+      air3-slider giữa các lần mở (thay vì tạo node mới mỗi lần, hợp lý vì đây là panel trượt cạnh),
+      thì ngay sau khi click card kế tiếp, `querySelector(...)` trong `openProfileModal()` trả về
+      NGAY node CŨ (còn nguyên nội dung người trước) trước khi Upwork kịp fetch xong dữ liệu người
+      mới — content "không đổi" bị coi nhầm là "đã load xong", nhưng thực ra là data CŨ, SAI người.
+      Hệ quả nặng: gửi nhầm data người A đi tìm contact cho người B, vừa tốn tiền Exa/OpenAI vô ích
+      vừa cho kết quả sai mà UI không có cách nào biết để nghi ngờ.
+      Fix: `waitForModalContentStable()` nhận thêm `priorContent` (nội dung modal chụp lúc TRƯỚC
+      khi click, ở `openProfileModal()`) — bắt buộc phải thấy content THẬT SỰ khác `priorContent`
+      mới bắt đầu đếm "ổn định" (không có `priorContent` — modal thật sự mới/trống — thì bỏ qua yêu
+      cầu này, giữ nguyên hành vi cũ, không ảnh hưởng case bình thường). Hết timeout 10s mà content
+      CHƯA TỪNG đổi khỏi `priorContent` -> throw thẳng (rơi vào `analysisError`, bỏ qua đúng 1
+      freelancer đó) thay vì âm thầm trả data cũ đi phân tích — thà mất 1 lead còn hơn có 1 lead với
+      thông tin liên hệ gán nhầm người. Nếu content ĐÃ đổi nhưng chưa kịp ổn định trong 10s (case
+      "load chậm" đã biết từ trước) vẫn giữ hành vi cũ (best-effort, không throw). Nhân tiện thêm
+      `console.warn()` trong `closeProfileModal()` khi modal không biến mất khỏi DOM sau 4s chờ —
+      xác nhận/phủ định trực tiếp giả thuyết "Upwork tái dùng node" ở lần chạy live tiếp theo, không
+      cần đoán thêm.
+      **CHƯA verify live** (không có trình duyệt thật để tự chạy) — cần user tự chạy lại 1 batch
+      Upwork freelancer thật với fix này, xem: (1) `about`/`portfolio`/`education` có còn lặp giữa
+      2 freelancer liên tiếp không; (2) console có xuất hiện warning "Modal element is still in the
+      DOM 4s after closing" không (xác nhận giả thuyết tái dùng node); (3) có freelancer nào bị
+      throw "Modal content never changed..." không — nếu throw quá thường xuyên (không phải hiếm),
+      nghĩa là 10s timeout chưa đủ cho tốc độ fetch thật của Upwork, cần tăng thêm chứ không đổi
+      cách tiếp cận (cùng tinh thần ghi chú 2.5s/10s ở trên).
+      **Bug thứ 2 (NẶNG HƠN, cùng ngày) — click nhầm hẳn sang freelancer khác, không chỉ modal chưa
+      kịp load**: user gửi screenshot + console cho thấy panel báo "Opening profile 2/5: Arthur T."
+      nhưng trang trình duyệt THẬT SỰ mở ra là Sagar P. (khớp đúng URL
+      `.../talent/details/~01074f8dd366f73626/profile`) — tức là `card.dispatchEvent(click)` trong
+      `openProfileModal()` không mở đúng freelancer mà `extractCard(cards[i])` vừa đọc được từ
+      CHÍNH node đó. Fix bug thứ nhất (so content cũ/mới) KHÔNG bắt được case này vì nó chỉ kiểm tra
+      "content có đổi không", không kiểm tra "có đúng người không" — 2 loại lỗi khác nhau, cần 2 lớp
+      chặn riêng. Nghi vấn nguyên nhân: Upwork tự re-render/re-rank danh sách search results giữa
+      lúc crawl (cùng hiện tượng đã ghi nhận ở `goToNextPage()`: "cùng 1 freelancer bị lặp lại ở
+      ranh giới 2 trang pagination"), tái dùng cùng 1 DOM node ở 1 vị trí cho freelancer KHÁC —
+      `cards` (mảng `getTalentCards()` chụp 1 LẦN lúc vào trang, dùng xuyên suốt cả trang trong
+      `scrapeCurrentPage()`) có thể trỏ tới 1 node đã bị Upwork gán lại cho người khác giữa lúc ta
+      đọc card (`extractCard()`) và lúc thật sự click nó (có nhiều `await`/delay xen giữa: chờ AI
+      phân tích freelancer trước, `humanDelay`, đóng modal trước...). KHÔNG kiểm soát được lúc nào
+      Upwork tự re-render nên không sửa được tận gốc — chặn bằng xác nhận ĐỘC LẬP sau khi click.
+      Fix (`openProfileModal(card, expectedProfileUrl)`, `extractContractorId()`): trích contractor
+      id từ URL freelancer ta ĐỊNH mở (format `~xxxxx`, xác nhận thật từ chính URL profile — xem
+      `getProfileUrl()`), sau khi click xong bắt buộc chờ `window.location.href` chứa ĐÚNG id đó
+      (`waitFor`, timeout 5s) — không khớp thì throw ngay (rơi vào `analysisError`, bỏ qua đúng 1
+      freelancer đó) thay vì tiếp tục lấy nhầm data người khác đi phân tích. Đây là nguồn xác thực
+      ĐÁNG TIN hơn hẳn so sánh text content, vì URL là "ground truth" của chính trình duyệt — Upwork
+      dùng client-side routing (URL đổi thật khi mở profile, xác nhận qua chính screenshot user gửi:
+      address bar đổi thành `/nx/search/talent/details/{id}/profile`), khác DOM text vốn có thể bị
+      Upwork tái dùng/re-render bất cứ lúc nào.
+      Nhân tiện đổi thứ tự: `humanDelay(600, 1500)` giờ chạy TRƯỚC `extractCard()` thay vì sau (thu
+      hẹp khoảng thời gian giữa lúc đọc card và lúc click nó — không loại bỏ được rủi ro vì không
+      kiểm soát được Upwork, chỉ giảm cửa sổ thời gian có thể xảy ra staleness).
+      **Đã soát toàn bộ các luồng khác** (theo yêu cầu user, tránh bug tương tự ẩn ở chỗ khác) —
+      XÁC NHẬN không có luồng nào khác dính CÙNG loại bug này (giữ 1 mảng DOM element chụp 1 lần rồi
+      click vào từng phần tử sau nhiều `await`):
+      - Agency (`crawlAgencies()` trong popup.js) và Fiverr (`crawlFiverrSellers()`): điều hướng qua
+        `chrome.tabs.update({url: ...})` bằng URL đã capture SẴN (browser-level navigation), KHÔNG
+        click DOM element nào — không có class bug này.
+      - LinkedIn (`scrapeCurrentPage()` trong linkedin.js): đọc hết card đang hiển thị trong 1 lượt
+        quét đồng bộ, KHÔNG click/điều hướng từng item — không có class bug này.
+      - Pagination (`goToNextPage()` cả upwork.js lẫn `nextLink.click()` trong fiverr.js): nút Next
+        được query TRỰC TIẾP ngay trước khi click (`getPaginationInfo()` gọi đồng bộ, không có await
+        xen giữa) — không giữ reference qua await nào, an toàn.
+      - `discoverAgencies()`/`collectAgencyLinks()`: query lại `document.querySelectorAll` MỚI mỗi
+        lần gọi (không giữ mảng cố định), và không click bất kỳ element nào (chỉ đọc `img.src`/`alt`)
+        — không có class bug này.
+      Kết luận: cả 2 bug (content cũ + click nhầm người) CHỈ xảy ra ở đúng 1 chỗ —
+      `scrapeCurrentPage()`/`openProfileModal()` cho freelancer Upwork — vì đây là luồng DUY NHẤT
+      vừa giữ 1 mảng DOM element cố định cho CẢ TRANG, vừa click + chờ AI (delay dài) cho TỪNG phần
+      tử trong mảng đó.
+      **CHƯA verify live** — cần user chạy lại 1 batch thật, xem: (1) còn thấy panel báo sai tên so
+      với trang thật mở ra không; (2) tần suất throw "Opened the wrong profile..." — nếu xảy ra
+      thường xuyên (không phải hiếm), nghĩa là Upwork re-render danh sách rất hay xảy ra, lúc đó nên
+      cân nhắc phương án nặng hơn: bỏ hẳn việc giữ mảng `cards` cố định cho cả trang, thay bằng
+      re-query `getTalentCards()` MỖI freelancer (chọn phần tử đầu tiên có URL chưa có trong
+      `seenUrls`) — chưa làm ngay vì đây là thay đổi lớn hơn, rủi ro tự tạo bug mới cao hơn khi
+      không có trình duyệt thật để kiểm chứng ngay.
+      **Cập nhật sau batch 5 lead Exa tiếp theo:** 4 lead lỗi liên tiếp đều thấy URL chi tiết Arthur
+      `~01e480d361d97d5ab3`, dù ID kỳ vọng mỗi lead khác nhau. Điều này chỉ ra modal/route của
+      Arthur chưa đóng sau lượt đầu; giả thuyết danh sách re-render không giải thích tốt việc URL
+      cứ đứng yên ở cùng 1 người. `closeProfileModal()` trước đây tìm BackButton chỉ bên trong
+      `modal-profile-details`, rồi chỉ warning sau 4 giây mà vẫn đi tiếp. Sửa: tìm BackButton ở
+      slider/header hoặc toàn document, `.click()` và xác nhận route đã rời profile; nếu chưa thì
+      thử Escape và `history.back()`. Nếu vẫn ở route chi tiết, dừng crawl, giữ các lead đã xử lý,
+      báo lỗi trong panel. `openProfileModal()` cũng từ chối mở lead mới nếu route cũ còn hiện.
+      Có unit test cho các nhánh đóng modal; chưa verify trực tiếp trên Upwork live.
       Client Feedback: đã xác nhận qua HTML thật — modal preview này (kiểu "proposal preview", KHÔNG
       phải trang profile đầy đủ) không hề hiện review text nguyên văn, chỉ có rating số (⭐) + tag do
       Upwork tự rút ra ("Reliable", "Committed to Quality"...); chữ "Client feedback" duy nhất xuất
@@ -995,3 +1221,43 @@ Lead shape dùng xuyên suốt: `{ platform, title, url, snippet, postedAt, extr
       home-view -> Auto-hunt dùng đúng key vừa lưu), và nút "Test key"/"Save" ở Settings. Cần user
       tự mở lại extension (reload ở `chrome://extensions` vì `background.js`/`manifest.json` liên
       quan đã đổi) rồi thử tay trước khi coi đây là xong hẳn.
+- [ ] Research provider Exa.ai làm lựa chọn khác cạnh OpenAI cho ANALYZE_PROFILE/AGENCY/FIVERR
+      (2026-09-28, theo yêu cầu user — xem mục "Research provider" ở trên cho toàn bộ chi tiết thiết
+      kế/quyết định). Đã xong về code + test (`analyzeProfileWithExa`/`analyzeAgencyWithExa`/
+      `analyzeFiverrSellerWithExa`, `testExaApiKey`, UI onboarding + Settings, `manifest.json` thêm
+      `host_permissions` cho `api.exa.ai`) — 28 test mới, toàn bộ `node --test tests/**/*.test.*`
+      (81 test, tăng từ 53) pass bằng `fetch` mock. **CHƯA verify live bằng key Exa thật** — đây là
+      việc còn lại DUY NHẤT trước khi coi tính năng này là hoàn chỉnh, cần user tự làm vì Claude
+      không có key Exa thật để tự test. Checklist khi verify:
+      1. Onboarding: chọn radio "Exa.ai" -> nhập key thật -> "Save & test key" phải gọi được
+         `GET /agent/runs?limit=1` thật (không set-up gì thêm phía Exa dashboard trước đó ngoài tạo
+         key) -> chuyển sang home-view.
+      2. Chạy Auto-hunt Upwork freelancer/agency và Fiverr với Exa đang chọn — xác nhận: request
+         POST/GET thật đúng như research (status chuyển queued -> running -> completed, không kẹt ở
+         running quá lâu so với timeout 120s), `output.structured` parse đúng, kết quả tìm được
+         website/LinkedIn/email/phone có hợp lý so với thử cùng lead bằng OpenAI không.
+      3. Log `console.log('[Hunt-Ex][background] Exa usage/cost for'...)` trong console service
+         worker — đối chiếu shape thật của `usage`/`costDollars` (hiện code chỉ pass-through nguyên
+         object vì CHƯA biết chắc field con, xem mục "Research provider") — nếu shape khác dự đoán,
+         cập nhật lại comment ở 3 file `ai/*-analyzer.js` cho khớp thực tế, không cần đổi code (đã
+         pass-through nguyên vẹn).
+      4. Quan sát domain-avoidance: xem model có lỡ trả về link `upwork.com`/`fiverr.com` không dù
+         đã có soft instruction — nếu có, xác nhận `stripUpworkUrl()`/`stripFiverrUrl()` đã tự lọc
+         đúng (nhìn `result.website.url`/`result.linkedin.url` phải là `null` hoặc domain khác).
+      5. So sánh hit-rate/chi phí thực tế 1 batch nhỏ (~10-15 lead) giữa Exa (`effort: 'medium'`,
+         ~$0.10/run theo pricing cố định, x1-2 nếu có retry-khi-rỗng) và OpenAI hiện tại (đã có
+         benchmark cũ trong memory: ~$0.085/lead, 53% LinkedIn hit-rate trên Upwork) — quyết định
+         provider nào là mặc định thật sự nên dùng cho team marketing.
+      Các câu hỏi/đánh đổi CHƯA hỏi lại user (để đây, chỉ hỏi nếu bước verify live cho thấy cần
+      thiết — đừng tự đổi trước khi có dữ liệu thật):
+      - `effort: 'medium'` cố định cho cả 3 luồng — có thể cần khác nhau theo độ thưa dữ liệu
+        (giống nhận xét cũ `search_context_size` OpenAI: input thưa cần context cao hơn) một khi có
+        số liệu hit-rate thật để so sánh `low` vs `medium` vs `high`.
+      - Freelancer Exa gộp 1 run (identity+contact) thay vì 2 stage như OpenAI — nếu hit-rate thấp
+        hơn hẳn OpenAI, có thể cần tách lại thành 2 run Exa riêng (dùng `previousRunId` — có trong
+        request schema Exa nhưng CHƯA dùng, xem research — để run 2 kế thừa context run 1) thay vì
+        gộp, đánh đổi cost/latency ngược lại.
+      - Chưa dùng `budget.maxCostDollars`/`systemPrompt`/`input.exclusion` (đều có trong request
+        schema Exa nhưng không cần cho use-case hiện tại) — thêm sau nếu cần kiểm soát chi phí per-run
+        chặt hơn effort cố định, hoặc cần loại trừ domain cụ thể qua field chuyên dụng nếu Exa bổ
+        sung sau này.
